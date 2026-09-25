@@ -946,12 +946,14 @@ function PlatformCard(props: {
   return (
     <Card
       title={
-        <span className="fg-row">
-          <span>{props.name}</span>
+        // 标题本身就是 flex 行（.fg-card-title），不要再套 .fg-row —— 那个类带 border-top，
+        // 会在平台名上方画一条多余的横线。
+        <>
+          {props.name}
           <span className={`fg-tag ${account?.authenticated === true ? 'fg-tag-ok' : ''}`}>
             {account === undefined ? '状态未知' : account.authenticated ? '已登录' : '未登录'}
           </span>
-        </span>
+        </>
       }
     >
       {summary === undefined ? null : <div className="fg-hint">{summary}</div>}

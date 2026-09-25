@@ -41,6 +41,17 @@ unavailable while every other platform keeps working; the plugin reports that
 condition explicitly (as a degraded state with a reason) instead of failing
 silently or pretending the feature exists.
 
+## Plugin dependencies
+
+The plugin's own source pulls two normal npm libraries, declared in
+`package.json` and installed by the package manager (they are not vendored or
+re-published here):
+
+| Package | License | Why |
+| --- | --- | --- |
+| `qrcode` (with `pngjs`) | MIT | Renders the Tuya QR-login token as an image a phone can scan |
+| `jsqr` | Apache-2.0 | **Development only** — decodes the generated image in the test suite, so a broken QR fails the build instead of the user |
+
 ## Upstream attribution
 
 `miloco-mcp-server` describes itself as based on the Xiaomi Miloco project, and

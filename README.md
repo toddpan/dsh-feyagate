@@ -3,7 +3,7 @@
 > **这个文件解决什么问题**：让三类读者各自在 3 分钟内找到自己要看的东西 —— 想装的人拿到最短安装路径，想贡献的人拿到开发环境与目录职责，关心合规的人拿到"仓库里到底有什么、没有什么"。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.1.0`
+npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.2.0`
 
 ---
 
@@ -92,6 +92,17 @@ dsh plugin --profile <profile> add @dsh-external/dsh-feyagate-gateway
 ### 4. 登录平台账号
 
 MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对应工具完成（工具清单见 [FeyaGate_MCP_API.md](../feyagate-skill-gh/FeyaGate_MCP_API.md)），例如小米走浏览器完成 OAuth、涂鸦走二维码、美的/易微联走账号密码、华为走两步验证码。完整的图形化登录页在二期（见下方「功能清单」）。
+
+**涂鸦（唯一一条完全在聊天里走完的授权链）** —— 你只需要做两件事：
+
+1. 先在涂鸦 App 里查一次自己的用户代码：**我的 → 设置 → 账号与安全 → 用户代码**，把它发给模型（形如 `AY1790336520…`）。
+2. 模型回复里会出现一张**二维码图片**（不是 token 文本）。用涂鸦 App 右上角「+ / 扫一扫」扫它，再在 App 里点「确认登录」。
+
+之后不用你再说话：插件在服务端替模型轮询（单次最多等 35 秒），扫到即返回，模型会告诉你已登录，并可以接着 `device_list` 看设备。
+
+> 为什么必须由插件出图：上游 `auth/tuya_qr` 只回一个 `token`（`tuyaSmart--qrLogin/?token=…`）——那是给**摄像头**扫的载荷，聊天里没有可扫的东西，用户会被卡在「请扫描下方二维码」却没有二维码。插件把 token 渲染成 PNG（`/dsh-feyagate/auth/tuya/qr.png?token=…`）并写进工具结果与工具描述，见 [docs/verify-tuya-auth-flow.md](docs/verify-tuya-auth-flow.md)。
+>
+> 图片没显示时（客户端不渲染图片）：工具结果里同时给了 `qr_text_url`（方块字符版二维码，任何客户端都能显示）；也可以直接把该地址粘进浏览器。
 
 最短路径到"控制一盏灯"：装插件 → 装后台服务 → 对话里让模型登录米家 → 让模型 `device/list` 找到灯 → 开灯。
 
@@ -319,8 +330,8 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 - **全新克隆的入口只有一条命令**：`npm install && npm test`。`lib/` 是构建产物、不在仓库里，所以下面那些依赖 `lib/` 的检查必须先 `npm run build`；`npm test` 已经包含构建。
 - 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
 - **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
-- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）+ 属主/看门狗（`check-supervise-ownership.mjs`）。
-- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **148 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 90 安装生命周期 + 10 属主/看门狗），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
+- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）+ 属主/看门狗（`check-supervise-ownership.mjs`）+ 涂鸦二维码（`check-tuya-qr.mjs`）。
+- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **183 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 10 属主/看门狗 + 26 涂鸦二维码 + 99 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
 - 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
 - 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
@@ -341,6 +352,7 @@ app/dsh-feyagate/
 ├── scripts/gen-manifest.mjs  ★ 唯一维护清单的入口（见「为什么需要清单」）
 ├── scripts/build.sh          tsc + tsdown 串起来，产出 lib/
 ├── scripts/verify-manifest.mjs CI 校验清单自洽
+├── scripts/check-tuya-qr.mjs  涂鸦二维码：编码后用独立解码器读回
 ├── scripts/smoke.mjs         端到端冒烟：真下载 → 真校验 → 真解压 → 真启动
 ├── skills/feyagate-gateway/SKILL.md   随插件分发的模型技能文档
 ├── src/                      Host 半侧
@@ -376,6 +388,7 @@ app/dsh-feyagate/
     ├── design.md             工程内设计文档（双半侧边界、MCP 选型、状态机、字段归属）
     ├── user-guide.zh.md      面向最终用户的操作手册
     ├── verify-mcp-inputschema-fix.md
+    ├── verify-tuya-auth-flow.md
     │                         验证记录：AI 看不到工具的真实根因（上游 inputSchema 不合规）与修复
     └── adr/0001…0008         8 条架构决策记录（0008：多实例共享安装根时的接管策略）
 ```
@@ -389,12 +402,13 @@ app/dsh-feyagate/
 | `scripts/verify-manifest.mjs` | CI 校验：清单自洽（资产 URL 与文件名一致、`channel` 指向存在的资产、`pluginCompat` 区间合法） |
 | `scripts/selfcheck-download.mjs` | 下载/校验/解压层的单元自检（用构造出来的归档，不联网）：校验失败必须删掉坏包且绝不落位、无校验值默认拒绝、顶层目录上移、找不到二进制时报错而不是静默成功 |
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
+| `scripts/check-tuya-qr.mjs` | 涂鸦授权：token→二维码（PNG 与文本兜底**都用独立解码器 `jsqr` 读回**，不只看「产生了图片」）、`chat_display` 文案、路由端到端、非法 token 400（26 项断言） |
 | `scripts/check-supervise-ownership.mjs` | 属主与看门狗：pid 文件写明属主时**访客不得杀掉别人的子进程**（只如实报告），属主消失后才允许替换，无人拥有的会被接管并登记自己为属主（10 项断言，用快速看门狗参数，约 3 秒） |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
 | `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 接管未就绪进程 → 卸载保数据 → 启动即失败（90 项断言） |
 | `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
 | `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 |
-| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（148 项计数断言） |
+| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（183 项计数断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |
 | `npm run build:client` | 只跑 tsdown，快速迭代浏览器半侧 |
 
@@ -402,6 +416,7 @@ app/dsh-feyagate/
 
 - [`docs/design.md`](docs/design.md)：双半侧职责边界、为什么桥指向门面、状态机、配置字段归属表。
 - [`docs/verify-mcp-inputschema-fix.md`](docs/verify-mcp-inputschema-fix.md)：**AI 看不到 `mcp__feyagate__*` 工具**的根因链与修复证据（含真机复验与复现命令）。
+- [`docs/verify-tuya-auth-flow.md`](docs/verify-tuya-auth-flow.md)：**涂鸦授权卡在「请扫码」却没有二维码**的根因、三层适配设计与验证证据（独立解码器回环 + 真机探针）。
 - [`docs/adr/`](docs/adr)：7 条已定决策与它们的**替代方案被否的理由**。改架构前先看有没有撞上其中一条。
 - [`../../docs/DSH-插件机制研究报告.md`](../../docs/DSH-插件机制研究报告.md)：DSH 插件机制的实证结论（每条带文件:行号）。
 
@@ -414,7 +429,7 @@ app/dsh-feyagate/
 
 ## 实现状态（诚实声明）
 
-本 README 描述的是 **0.1.0 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
+本 README 描述的是 **0.2.0 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
 
 - ✅ 双半侧都已在源码里：Host（`index.ts`、`runtime.ts`、`install.ts`、`supervise/*`、`mcp/facade.ts`、`api.ts`、`config-gen.ts`、`download/*`、`child-api.ts`、`settings.ts`）与浏览器半侧（`client/index.tsx` + `client/contract.ts`）。
 - ✅ 工具链齐全：`scripts/{build.sh,gen-manifest.mjs,verify-manifest.mjs,check-patch.mjs,smoke.mjs,smoke-install.mjs}`，`lib/` 是构建产物（已 gitignore）。
@@ -422,7 +437,7 @@ app/dsh-feyagate/
 
 ### 已经实测过的部分
 
-`npm test` 全绿（24 + 19 + 90 + 10 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
+`npm test` 全绿（24 + 19 + 10 + 26 + 99 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
 
 | 验证对象 | 证据 |
 |---|---|
@@ -437,6 +452,7 @@ app/dsh-feyagate/
 | 启动 → 健康检查 → 门面转发真实工具列表 → REST `{code,data}` 解包 | `scripts/smoke-install.mjs` 第 1 节 |
 | 升级后回滚目标仍然可用、回滚后服务健康 | `scripts/smoke-install.mjs` 第 2–3 节 |
 | 子进程被 `SIGKILL` 后自动拉起（换 pid、重启计数 +1） | `scripts/smoke-install.mjs` 第 7 节 |
+| 上游只回 token 时，门面把它变成聊天里可扫的二维码（`chat_display`），并用工具描述告诉模型「贴图 + 自己轮询、别反问用户」 | `scripts/smoke-install.mjs`（假子进程 + 调用计数器）：描述注入、`chat_display` 指向插件路由、**对照直连子进程只有 bare token**、一次调用等到 `authorized`（子进程被问 ≥3 次）、上游字段只加不改；`scripts/check-tuya-qr.mjs` 26 项含**真实解码回环** |
 | pid 文件写明属主时，**访客不杀别人的子进程**；属主消失后才替换；无人拥有的接管后登记自己为属主 | `scripts/check-supervise-ownership.mjs` 10/10（用 `watchdogIntervalMs`/`watchdogFailures` 把 45 秒压缩到约 3 秒） |
 | **接管尚未就绪的进程，而不是杀掉它重启**（共享安装根下多实例互杀的回归） | `scripts/smoke-install.mjs` 第 8 节：pid 文件指向一个「1.5 秒后才应答 `/health`」的进程，启动后必须**等到它健康并接管**，且该进程**不能被 SIGTERM** |
 | 卸载删除版本目录但**保留 `data/`** | `scripts/smoke-install.mjs` 第 9 节 |

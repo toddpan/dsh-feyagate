@@ -32,6 +32,7 @@ import { type GatewayRuntime } from './runtime.js'
 import { readSettings, validateSettings, writeSettings, type SettingsPatch } from './settings.js'
 import { loadManifest, latestVersionForPlatform, listVersionsForPlatform, compatSummary } from './manifest.js'
 import { LAUNCHER } from './launcher.js'
+import { InvalidTuyaTokenError, renderTuyaQrPng, renderTuyaQrText } from './qr-image.js'
 import { cacheDir } from './paths.js'
 import type { ApiEnvelope } from './types.js'
 
@@ -153,6 +154,49 @@ export function createApiHandler(options: ApiOptions): (req: IncomingMessage, re
           const since = Number.parseInt(url.searchParams.get('since') ?? '', 10)
           const limit = Math.min(Number.parseInt(url.searchParams.get('limit') ?? '', 10) || LOG_FORWARD_LINES, 2000)
           ok(res, Number.isFinite(since) ? runtime.log.since(since, limit) : runtime.log.tail(limit))
+          return
+        }
+
+        // ── Tuya QR authorization (rendered for chat) ──────────────────
+        // Read-only GETs, and deliberately not Origin-guarded: the DSH chat
+        // renders the QR through an `<img src>` pointing here, and a browser
+        // sends no Origin header for an image load. The token is short-lived
+        // (300s) and the route only encodes a token that is well-formed, so a
+        // page the user happens to have open cannot turn it into a generic
+        // "render this QR for me" service.
+        case 'GET /auth/tuya/qr.png': {
+          const token = url.searchParams.get('token') ?? ''
+          try {
+            const png = await renderTuyaQrPng(token)
+            res.writeHead(200, {
+              'Content-Type': 'image/png',
+              'Content-Length': png.length,
+              // The image encodes a live credential; never let it sit in a cache.
+              'Cache-Control': 'no-store',
+            })
+            res.end(png)
+          } catch (error) {
+            if (error instanceof InvalidTuyaTokenError) fail(res, 400, error.message)
+            else fail(res, 500, `二维码生成失败：${(error as Error).message}`)
+          }
+          return
+        }
+
+        case 'GET /auth/tuya/qr.txt': {
+          const token = url.searchParams.get('token') ?? ''
+          try {
+            const art = await renderTuyaQrText(token)
+            const body = Buffer.from(art, 'utf8')
+            res.writeHead(200, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'Content-Length': body.length,
+              'Cache-Control': 'no-store',
+            })
+            res.end(body)
+          } catch (error) {
+            if (error instanceof InvalidTuyaTokenError) fail(res, 400, error.message)
+            else fail(res, 500, `二维码生成失败：${(error as Error).message}`)
+          }
           return
         }
 

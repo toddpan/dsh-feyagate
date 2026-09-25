@@ -1,7 +1,7 @@
 ---
 name: feyagate-gateway
 description: FeyaGate（飞阳网关）智能家居工具集：通过 DSH 的 MCP 桥控制小米/涂鸦/美的/易微联/华为/Home Assistant 设备，看摄像头、跑场景与定时、配触发规则、查授权状态。当用户提到家里的灯/空调/窗帘/插座/摄像头/小爱音箱，或要求"打开客厅的灯""看看门口摄像头""每天 22 点关灯""有人进门就开灯"时使用。
-version: 0.1.0
+version: 0.2.0
 metadata:
   dsh:
     mcpServerName: feyagate
@@ -38,7 +38,7 @@ metadata:
 | 长期记忆 | 记忆（走技能/记忆工具） | `skill/context`、`skill/list` |
 | 技能包管理 | 技能 | `skill/list`、`skill/read`、`skill/create`、`skill/delete`、`skill/reload` |
 | 授权与试用状态 | 授权查询 | `license/status`（写授权码用 `license/set`，清除用 `license/clear`） |
-| 平台登录 / 退出 | 平台认证 | `xiaomi/auth_url` + `xiaomi/auth_callback`、`auth/tuya_qr`、`auth/midea_login`、`auth/ewelink_login` |
+| 平台登录 / 退出 | 平台认证 | `xiaomi/auth_url` + `xiaomi/auth_callback`、`auth/tuya_qr`（见下方「涂鸦授权」）、`auth/midea_login`、`auth/ewelink_login` |
 | 小爱音箱说话 / 放歌 | 小爱 | `xiaoai/tts`、`xiaoai/play_music`、`xiaoai/control` |
 | 小智终端接入 | 小智 | `xiaozhi/list`、`xiaozhi/add`、`xiaozhi/remove` |
 | 统计与用量 | 统计 | `stats/dashboard`、`stats/token_usage`、`stats/trigger_summary` |
@@ -80,6 +80,23 @@ set_xiaomi_device_property {deviceId, siid: 2, piid: 1, value: true}
 
 | 症状 | 含义 | 怎么办 |
 |---|---|---|
+## 涂鸦授权：在聊天里走完全流程
+
+用户要授权涂鸦（或报「涂鸦未授权」）时，**不要**把 token 当文本贴给用户 —— 那是给手机摄像头扫的载荷，聊天里没有可扫的东西。按下面走：
+
+1. 问用户要**用户代码**（只需一次）：涂鸦 App → 我的 → 设置 → 账号与安全 → 用户代码。
+2. 调用 `auth/tuya_qr {user_code}`。返回体会多出几个字段，由插件（门面）注入：
+   - `chat_display`：**一行 Markdown 图片**。把它**原样**放进你的回复里（DSH 会渲染成二维码），再补一句操作路径：涂鸦 App → 右上角「+ / 扫一扫」→ 扫这张码 → App 里点「确认登录」。
+   - `qr_image_url` / `qr_text_url`：图片地址与方块字符版兜底；用户说看不到图时给 `qr_text_url`。
+   - `user_code`、`next_action`：下一步要用的参数与动作，照做即可。
+3. 调用 `auth/tuya_qr_status {token, user_code}` 轮询。**该工具在服务端等待（单次最多约 35 秒）**，所以：
+   - 返回 `status:"pending"` → 立刻再调一次，**不要**自己 sleep，**不要**问用户「扫好了吗」；
+   - 返回 `status:"authorized"` → 告诉用户已登录，可用 `device/list` 看设备（写操作需要授权版或有效试用，见 `license/status`）；
+   - `success:false` 或 `status:"error"` → 二维码失效，重新 `auth/tuya_qr` 生成新码。
+4. 用户给了错的用户代码时，上游回 `USERCODE_INCORRECT`（原样透传，插件不伪造二维码）—— 让用户回到 App 里核对用户代码，不要反复重试。
+
+工具描述里也写了同样的契约（插件在 `tools/list` 时注入），所以即使没有这份文档，按工具描述做也是对的。
+
 | `{"success": false, "error": "license_required"}` | 该平台的**写操作**需要授权或有效试用（涂鸦/美的/易微联的 90 天试用到期后） | **读操作仍然可用** —— 先告诉用户能看但不能控，并给出授权入口（`license/status` 查状态，`license/set` 写授权码）。不要反复重试写操作 |
 | 设备在列表里但控制返回失败 | 设备**离线**（云端认为它不可达） | 用 `device/specs` 或平台的读取工具确认在线状态；建议用户在手机 App 里确认设备在线后重试 |
 | `{"error": "当前平台不支持摄像头功能"}` | 摄像头功能在 **Windows** 上不可用（依赖米家 P2P 协议库，只支持 macOS / Linux） | 明确告知平台限制，不要改参数重试 |

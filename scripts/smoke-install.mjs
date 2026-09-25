@@ -137,11 +137,19 @@ const TOOLS = [
   // response — 76 tools become zero, with a server that still looks connected.
   // The facade must repair it on the way through.
   { name: 'auth/platforms', description: '平台列表（零参数）', inputSchema: {} },
+  // Tuya authorization: upstream answers with nothing but a token, which a
+  // chat client cannot scan. The facade has to turn it into something visible.
+  { name: 'auth/tuya_qr', description: '获取涂鸦平台 QR 码授权', inputSchema: { type: 'object', properties: { user_code: { type: 'string' } }, required: ['user_code'] } },
+  { name: 'auth/tuya_qr_status', description: '查询涂鸦 QR 码扫码授权状态', inputSchema: { type: 'object', properties: { token: { type: 'string' }, user_code: { type: 'string' } }, required: ['token', 'user_code'] } },
 ]
+
+// How many times the status tool was asked; proves the facade does the polling.
+let tuyaPolls = 0
 
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1')
   if (req.method === 'GET' && url.pathname === '/health') return json(res, { status: 'ok' })
+  if (req.method === 'GET' && url.pathname === '/__tuya_polls') return json(res, { polls: tuyaPolls })
   if (req.method === 'GET' && url.pathname === '/api/v1/gateway/info') {
     return json(res, { code: 0, data: {
       name: 'miloco-mcp-server', version, platform: process.platform === 'darwin' ? 'macos' : 'linux',
@@ -167,6 +175,21 @@ const server = createServer((req, res) => {
       if (message.method === 'tools/list') return reply({ tools: TOOLS })
       if (message.method === 'tools/call') {
         const name = message.params && message.params.name
+        if (name === 'auth/tuya_qr') {
+          return reply({ content: [{ type: 'text', text: JSON.stringify({
+            success: true,
+            qr_url: 'tuyaSmart--qrLogin/?token=FAKEQRTOKEN1234567',
+            token: 'FAKEQRTOKEN1234567',
+            expire_time: 300,
+          }) }] })
+        }
+        if (name === 'auth/tuya_qr_status') {
+          tuyaPolls += 1
+          return reply({ content: [{ type: 'text', text: JSON.stringify(
+            // Two 'pending' answers first: a facade that polls must wait them out.
+            tuyaPolls < 3 ? { success: true, status: 'pending' } : { success: true, status: 'authorized', uid: 'fake-uid' },
+          ) }] })
+        }
         const payload = name === 'auth/platforms'
           ? [{ platform_id: 'xiaomi', platform_name: '米家', authenticated: true, auth_status: { cloud_server: 'cn', token_remaining_seconds: 86400 } }]
           : name === 'xiaomi/camera_list'
@@ -446,7 +469,7 @@ console.log('— 1. 安装 zip（本地包来源 + sha256 校验 + 解压 + 启�
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   })
   const tools = proxied.body?.result?.tools ?? []
-  check('门面转发到子进程并返回工具列表', tools.length === 3, `${tools.length} 个工具`)
+  check('门面转发到子进程并返回工具列表', tools.length === 5, `${tools.length} 个工具`)
 
   // Regression: upstream ships `inputSchema: {}` for zero-argument tools. A strict
   // client validates the whole `tools/list` response, so one such tool used to cost
@@ -480,6 +503,58 @@ console.log('— 1. 安装 zip（本地包来源 + sha256 校验 + 解压 + 启�
     JSON.stringify(childZeroArg?.inputSchema) === '{}',
     JSON.stringify(childZeroArg?.inputSchema),
   )
+
+  // ── 涂鸦授权：让用户能在聊天里完成扫码 ─────────────────────────
+  // Upstream returns a bare token; a chat client has nothing to render, which is
+  // how the flow used to dead-end ("请扫描下方二维码" with no QR below it).
+  const tuyaQrTool = tools.find((tool) => tool.name === 'auth/tuya_qr')
+  check(
+    '门面给涂鸦授权工具补上"聊天内流程"说明',
+    typeof tuyaQrTool?.description === 'string' && tuyaQrTool.description.includes('DSH 聊天内授权流程'),
+    String(tuyaQrTool?.description ?? '').slice(-52),
+  )
+  const tuyaStatusTool = tools.find((tool) => tool.name === 'auth/tuya_qr_status')
+  check(
+    '门面给状态工具补上"服务端会等待、不要 sleep"的说明',
+    typeof tuyaStatusTool?.description === 'string' && tuyaStatusTool.description.includes('不要') && tuyaStatusTool.description.includes('DSH 聊天内授权流程'),
+  )
+
+  // `path` defaults to the facade's `/mcp`; the child itself serves `/mcp/http`.
+  const callTool = (port, name, args, path = '/mcp') =>
+    fetchJson(`http://127.0.0.1:${port}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name, arguments: args } }),
+    })
+  const payloadOf = (response) => JSON.parse(response.body?.result?.content?.[0]?.text ?? '{}')
+
+  const qrCall = await callTool(facadePort, 'auth/tuya_qr', { user_code: 'FAKE-USER-CODE' })
+  const qrPayload = payloadOf(qrCall)
+  check(
+    '门面把 token 换成聊天里可扫的二维码（chat_display 是 Markdown 图片）',
+    typeof qrPayload.chat_display === 'string' &&
+      qrPayload.chat_display.includes('/dsh-feyagate/auth/tuya/qr.png?token=FAKEQRTOKEN1234567'),
+    String(qrPayload.chat_display ?? '').split('\n')[0].slice(0, 70),
+  )
+  check(
+    '返回体自带 user_code 与下一步，模型不必自己拼',
+    qrPayload.user_code === 'FAKE-USER-CODE' &&
+      typeof qrPayload.next_action === 'string' &&
+      qrPayload.next_action.includes('auth/tuya_qr_status'),
+  )
+  check('上游 JSON 的原有字段仍然保留（只加不改）', qrPayload.token === 'FAKEQRTOKEN1234567' && qrPayload.expire_time === 300)
+
+  const qrDirect = payloadOf(await callTool(running?.effectivePort, 'auth/tuya_qr', { user_code: 'FAKE-USER-CODE' }, '/mcp/http'))
+  check('（对照）子进程原样返回 bare token，没有 chat_display', qrDirect.chat_display === undefined && qrDirect.token === 'FAKEQRTOKEN1234567')
+
+  // The status tool is long-polled by the facade: one client call has to survive
+  // the user's scan instead of making the model sleep and re-ask.
+  const statusCall = await callTool(facadePort, 'auth/tuya_qr_status', { token: 'FAKEQRTOKEN1234567', user_code: 'FAKE-USER-CODE' })
+  const statusPayload = payloadOf(statusCall)
+  check('门面替模型轮询：一次调用就等到 authorized', statusPayload.status === 'authorized', JSON.stringify(statusPayload))
+  const polls = (await fetchJson(`http://127.0.0.1:${running?.effectivePort}/__tuya_polls`)).body?.polls ?? 0
+  check('确实在服务端轮询了子进程（而不是让模型反复问）', polls >= 3, `子进程被问 ${polls} 次`)
+  check('授权成功后返回体给出后续动作', typeof statusPayload.note === 'string' && statusPayload.note.includes('授权成功'), String(statusPayload.note ?? '').slice(0, 50))
 
   const listSchema = await loadListToolsSchema()
   if (listSchema === null) {

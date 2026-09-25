@@ -68,6 +68,20 @@ export const ADOPT_GRACE_MS = 30_000
 export const ADOPT_POLL_MS = 500
 
 /**
+ * Tuya authorization polling, done on the plugin's side.
+ *
+ * The status tool is asked by the model, but a model that has to sleep and
+ * re-ask turns a two-second scan into a dozen turns of chatter. So the facade
+ * waits instead: one client call blocks up to `TUYA_STATUS_LONG_POLL_MS`,
+ * re-asking upstream every `TUYA_STATUS_POLL_INTERVAL_MS`, and returns as soon
+ * as the user scans. The ceiling stays well below the MCP bridge's 60s per-call
+ * timeout, and a timeout is answered as `pending` — the model just calls again,
+ * so a slow user loses nothing.
+ */
+export const TUYA_STATUS_LONG_POLL_MS = 35_000
+export const TUYA_STATUS_POLL_INTERVAL_MS = 2_000
+
+/**
  * Hung-child watchdog: probe every `WATCHDOG_INTERVAL_MS`, and after
  * `WATCHDOG_FAILURES` consecutive misses replace the process — unless another
  * live DSH instance owns it (see `PidRecord.ownerPid` in `supervise/process.ts`).

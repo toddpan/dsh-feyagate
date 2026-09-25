@@ -40,7 +40,16 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
-import { DEFAULT_FACADE_PORT, PORT_SCAN_RANGE } from '../constants.js'
+import { DEFAULT_FACADE_PORT, PORT_SCAN_RANGE, TUYA_STATUS_LONG_POLL_MS, TUYA_STATUS_POLL_INTERVAL_MS } from '../constants.js'
+import {
+  TUYA_QR_STATUS_TOOL_NOTE,
+  TUYA_QR_TOOL_NOTE,
+  isTuyaToken,
+  tuyaQrChatDisplay,
+  tuyaQrImagePath,
+  tuyaQrNextAction,
+  tuyaQrTextPath,
+} from '../tuya-qr.js'
 import { type LogBuffer } from '../log.js'
 import { type StateStore } from '../state.js'
 import { findFreePort } from '../supervise/health.js'
@@ -110,6 +119,9 @@ interface JsonRpcMessage {
   id?: string | number | null
   method?: string
   params?: unknown
+  /** Present on responses; typed loosely because we only ever read into it. */
+  result?: unknown
+  error?: unknown
 }
 
 /**
@@ -182,9 +194,25 @@ function normalizedInputSchema(schema: unknown): { schema: Record<string, unknow
 }
 
 /**
+ * Descriptions the facade appends to upstream tools.
+ *
+ * The upstream text describes *what* a tool does; a chat client additionally has
+ * to know **how the conversation is supposed to proceed** — that the QR has to be
+ * handed to the user as an image, and that the status tool already waits so it
+ * must not be interleaved with "are you done yet?". Upstream cannot say this
+ * (the desktop app has its own UI for the same tools), so the facade — the side
+ * that talks to a chat client — says it.
+ */
+const TOOL_DESCRIPTION_NOTES: Record<string, string> = {
+  'auth/tuya_qr': TUYA_QR_TOOL_NOTE,
+  'auth/tuya_qr_status': TUYA_QR_STATUS_TOOL_NOTE,
+}
+
+/**
  * Repair every `tools/list` result in a parsed JSON-RPC payload (single message
- * or batch). Returns how many schemas actually changed, so callers can leave an
- * already-conforming response byte-identical.
+ * or batch). Returns how many tools actually changed (schema repaired and/or
+ * description annotated), so callers can leave an unchanged response
+ * byte-identical.
  */
 function repairToolsListResult(payload: unknown): number {
   const messages = Array.isArray(payload) ? payload : [payload]
@@ -197,14 +225,109 @@ function repairToolsListResult(payload: unknown): number {
     if (!Array.isArray(tools)) continue
     for (const tool of tools) {
       if (tool === null || typeof tool !== 'object' || Array.isArray(tool)) continue
-      const entry = tool as { inputSchema?: unknown }
-      const { schema, changed } = normalizedInputSchema(entry.inputSchema)
-      if (!changed) continue
-      entry.inputSchema = schema
-      repaired += 1
+      const entry = tool as { name?: unknown; description?: unknown; inputSchema?: unknown }
+      let changed = false
+      const { schema, changed: schemaChanged } = normalizedInputSchema(entry.inputSchema)
+      if (schemaChanged) {
+        entry.inputSchema = schema
+        changed = true
+      }
+      const note = typeof entry.name === 'string' ? TOOL_DESCRIPTION_NOTES[entry.name] : undefined
+      if (note !== undefined && !(typeof entry.description === 'string' && entry.description.includes('DSH 聊天内授权流程'))) {
+        entry.description = `${typeof entry.description === 'string' ? entry.description : ''}${note}`
+        changed = true
+      }
+      if (changed) repaired += 1
     }
   }
   return repaired
+}
+
+/** One `tools/call` found in a request body (single message or batch). */
+interface ToolCallRequest {
+  name: string
+  arguments: Record<string, unknown>
+}
+
+/** The `tools/call` a request body asks for, or null when it asks for anything else. */
+function requestedToolCall(body: string): ToolCallRequest | null {
+  try {
+    const parsed: unknown = JSON.parse(body)
+    const messages = Array.isArray(parsed) ? parsed : [parsed]
+    for (const message of messages) {
+      if (message === null || typeof message !== 'object') continue
+      const envelope = message as JsonRpcMessage
+      if (envelope.method !== 'tools/call') continue
+      const params = envelope.params
+      if (params === null || typeof params !== 'object' || Array.isArray(params)) continue
+      const { name, arguments: args } = params as { name?: unknown; arguments?: unknown }
+      if (typeof name !== 'string') continue
+      const parsedArgs = args !== null && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>) : {}
+      return { name, arguments: parsedArgs }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The JSON object the child put in its first text content item.
+ *
+ * Upstream answers every tool with `result.content[0].text` holding a stringified
+ * JSON object (see `McpServer::handle_tool_call`), so adapting a result means
+ * reading that string, adding fields, and writing it back.
+ */
+function parseToolPayload(responseBody: string): { message: JsonRpcMessage; content: Record<string, unknown>; payload: Record<string, unknown> } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(responseBody)
+  } catch {
+    return null
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const message = parsed as JsonRpcMessage
+  const result = message.result
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return null
+  const content = (result as { content?: unknown }).content
+  if (!Array.isArray(content)) return null
+  const first = content[0]
+  if (first === null || typeof first !== 'object' || Array.isArray(first)) return null
+  const item = first as { type?: unknown; text?: unknown }
+  if (item.type !== 'text' || typeof item.text !== 'string') return null
+  let payload: unknown
+  try {
+    payload = JSON.parse(item.text)
+  } catch {
+    return null
+  }
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
+  return { message, content: item as Record<string, unknown>, payload: payload as Record<string, unknown> }
+}
+
+/** The `status` field of an upstream Tuya status answer, when it has one. */
+function tuyaStatusOf(responseBody: string): string | null {
+  const parsed = parseToolPayload(responseBody)
+  if (parsed === null) return null
+  const status = parsed.payload.status
+  return typeof status === 'string' ? status : null
+}
+
+/** What to tell the model about an upstream Tuya status answer. */
+function tuyaStatusExtras(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const status = typeof payload.status === 'string' ? payload.status : null
+  if (status === 'authorized') {
+    return {
+      note: '涂鸦授权成功，token 已保存在后台服务里。可以调用 device_list 或 tuya/refresh 查看设备；写操作需要授权版或有效试用，见 license/status。',
+    }
+  }
+  if (status === 'pending') {
+    return { note: '用户还没扫码：立即再次调用 auth/tuya_qr_status（服务端会继续等待），不要反问用户"扫好了吗"，也不要自己 sleep。' }
+  }
+  if (status === 'error' || payload.success === false) {
+    return { note: '扫码授权失败或二维码已失效：重新调用 auth/tuya_qr 生成新二维码，再按 chat_display 引导用户扫一次。' }
+  }
+  return null
 }
 
 /** True when the request body asks for `tools/list` (single message or batch). */
@@ -421,7 +544,16 @@ export class McpFacade {
 
     const port = this.childPort()
     if (port !== null) {
-      const proxied = await this.proxy(port, body)
+      let proxied = await this.proxy(port, body)
+      if (proxied !== null) {
+        // Tuya authorization is the one flow that needs two calls to feel like
+        // one: the model shows the QR, then asks for the status until the user
+        // scans. The waiting happens here so the model never has to sleep.
+        if (requestedToolCall(body)?.name === 'auth/tuya_qr_status') {
+          proxied = await this.longPollTuyaStatus(port, body, proxied)
+        }
+        proxied = { ...proxied, body: this.adaptToolResult(body, proxied.body, proxied.contentType) }
+      }
       if (proxied !== null) {
         if (proxied.body === '') {
           // The child answered a notification with an empty 202.
@@ -489,6 +621,74 @@ export class McpFacade {
     } catch (error) {
       this.log.warn(`转发到后台服务失败（端口 ${port}）：${(error as Error).message}`)
       return null
+    }
+  }
+
+  /**
+   * Wait on an upstream `auth/tuya_qr_status` answer.
+   *
+   * Polling is what makes the chat flow work at all: the user scans, and the
+   * answer has to come back on its own. Doing it here (rather than asking the
+   * model to sleep between calls) also keeps a slow user cheap — the ceiling is
+   * one client call, and the caller simply asks again.
+   */
+  private async longPollTuyaStatus(
+    port: number,
+    body: string,
+    first: { status: number; body: string; contentType: string },
+  ): Promise<{ status: number; body: string; contentType: string }> {
+    let current = first
+    const deadline = Date.now() + TUYA_STATUS_LONG_POLL_MS
+    while (tuyaStatusOf(current.body) === 'pending' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, TUYA_STATUS_POLL_INTERVAL_MS))
+      const next = await this.proxy(port, body)
+      // Child died mid-wait: the last good answer (a valid `pending`) beats an
+      // error, and the model's next call will surface the real problem.
+      if (next === null) return current
+      current = next
+    }
+    return current
+  }
+
+  /**
+   * Adapt one upstream tool result for a chat client.
+   *
+   * Only the Tuya authorization pair is touched, and only when the request and
+   * the answer both have the shape we expect; anything else is returned
+   * byte-identical. A facade that rewrites responses it does not fully
+   * understand is worse than one that forwards them.
+   */
+  private adaptToolResult(requestBody: string, responseBody: string, contentType: string): string {
+    const call = requestedToolCall(requestBody)
+    if (call === null || (call.name !== 'auth/tuya_qr' && call.name !== 'auth/tuya_qr_status')) return responseBody
+    if (responseBody === '' || !contentType.includes('json')) return responseBody
+    const parsed = parseToolPayload(responseBody)
+    if (parsed === null) {
+      this.log.warn(`${call.name} 的返回不符合预期结构，未做聊天适配`)
+      return responseBody
+    }
+    const extra = call.name === 'auth/tuya_qr' ? this.tuyaQrExtras(parsed.payload, call.arguments) : tuyaStatusExtras(parsed.payload)
+    if (extra === null) return responseBody
+    Object.assign(parsed.payload, extra)
+    parsed.content.text = JSON.stringify(parsed.payload)
+    return JSON.stringify(parsed.message)
+  }
+
+  /** Everything a chat client needs to actually finish the QR step. */
+  private tuyaQrExtras(payload: Record<string, unknown>, args: Record<string, unknown>): Record<string, unknown> | null {
+    if (payload.success !== true) return null
+    const token = typeof payload.token === 'string' ? payload.token : ''
+    if (!isTuyaToken(token)) return null
+    const userCode = typeof args.user_code === 'string' ? args.user_code : ''
+    const expire = typeof payload.expire_time === 'number' && payload.expire_time > 0 ? payload.expire_time : 300
+    this.log.info(`已为涂鸦授权生成可扫二维码（token ${token.slice(0, 8)}…，${expire}s 有效）`)
+    return {
+      qr_image_url: tuyaQrImagePath(token),
+      qr_text_url: tuyaQrTextPath(token),
+      chat_display: tuyaQrChatDisplay(token, expire),
+      user_code: userCode,
+      next_action: tuyaQrNextAction(token, userCode),
+      note: '把 chat_display 原样放进给用户的回复里（DSH 会渲染成二维码）；随后立即用返回的 token + user_code 调用 auth/tuya_qr_status，不要问用户"扫好了吗"。',
     }
   }
 

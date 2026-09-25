@@ -204,6 +204,7 @@ url: !!js "(() => { ... read $DSH_HOME/dsh-feyagate/state.json ... })()"
 | `docs/user-guide.zh.md` | 面向最终用户的操作手册 |
 | `docs/adr/0001…0008` | 8 条决策记录 |
 | `docs/verify-mcp-inputschema-fix.md` | 验证记录：上游 `inputSchema` 不合规导致桥丢掉全部工具（已修 + 真机复验） |
+| `docs/verify-tuya-auth-flow.md` | 验证记录：涂鸦授权在 DSH 聊天里走完全流程（门面适配工具结果 + 插件出图 + 服务端长轮询） |
 
 ---
 

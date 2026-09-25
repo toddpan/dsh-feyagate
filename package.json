@@ -40,11 +40,12 @@
     "manifest": "node scripts/gen-manifest.mjs",
     "check:manifest": "node scripts/verify-manifest.mjs",
     "check:patch": "node scripts/check-patch.mjs",
-    "check": "npm run typecheck && npm run check:manifest && npm run check:patch && npm run check:download && node scripts/smoke.mjs --offline",
+    "check": "npm run typecheck && npm run check:manifest && npm run check:patch",
     "smoke": "node scripts/smoke.mjs",
     "smoke:install": "node scripts/smoke-install.mjs",
-    "test": "npm run build && npm run check && npm run smoke:install",
-    "check:download": "node scripts/selfcheck-download.mjs"
+    "test": "npm run build && npm run check && npm run check:runtime && npm run smoke:install",
+    "check:download": "node scripts/selfcheck-download.mjs",
+    "check:runtime": "npm run check:download && node scripts/smoke.mjs --offline"
   },
   "exports": {
     ".": {

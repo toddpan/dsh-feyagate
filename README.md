@@ -315,12 +315,15 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 ### 开发环境
 
 - Node.js ≥ 20.16.0（`engines.node` 与 `engines.dsh >= 0.1.5-rc.1`）。
-- 依赖：`pnpm install`（或 `npm install`）。
-- 构建：`pnpm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`pnpm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`pnpm run typecheck`（tsc 只检查不产出）。
-- 清单维护：`pnpm run manifest`（重新生成）、`pnpm run check:manifest`（CI 校验）。
-- 端到端冒烟：`node scripts/smoke.mjs`（用本地临时目录跑一遍下载 → 校验 → 解压 → 启动，见下）。
+- **全新克隆的入口只有一条命令**：`npm install && npm test`。`lib/` 是构建产物、不在仓库里，所以下面那些依赖 `lib/` 的检查必须先 `npm run build`；`npm test` 已经包含构建。
+- 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
+- **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
+- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）。
+- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 136 项断言。
+- 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
+- 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
-> `scripts/smoke.mjs` 会把下载物与状态写进 `.smoke/`（默认被 `.gitignore` 忽略的是 `.cache/`、`tmp/`；**`.smoke/` 目前不在忽略名单里**，别把它提交上去）。
+> 冒烟脚本会往 `.smoke/`（`smoke-install.mjs` 用 `.smoke-install/`）写下载物与状态，两者都已在 `.gitignore` 里。
 
 浏览器半侧有一个**必须遵守的契约**：产出必须是 `window.__ModuleLoader__.load({ id, factory })` 形态的 lazy-CJS（[`tsdown.config.ts`](tsdown.config.ts) 的 banner/footer 已经在做这件事）。只有前端 baseline 白名单里的模块可以留成裸 `require(...)`，其余必须打进 bundle；额外需要的前端包要写进 `package.json` 的 `dsh.client.inject`。
 
@@ -385,8 +388,9 @@ app/dsh-feyagate/
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
 | `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 卸载保数据（54 项断言） |
-| `npm run check` | 类型检查 + 清单校验 + patch 校验 + 离线冒烟（不需要网络） |
-| `npm test` | `build` + `check` + `smoke:install`，是本仓库的完整验收 |
+| `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
+| `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 |
+| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（136 项断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |
 | `npm run build:client` | 只跑 tsdown，快速迭代浏览器半侧 |
 

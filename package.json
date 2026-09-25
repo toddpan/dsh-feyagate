@@ -35,6 +35,7 @@
   },
   "scripts": {
     "build": "bash scripts/build.sh",
+    "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:client": "tsdown",
     "manifest": "node scripts/gen-manifest.mjs",

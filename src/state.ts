@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 
 import { compareVersions } from './util/platform.js'
 import { writeJsonAtomic } from './util/atomic.js'
-import { defaultRoot, ensureLayout, readCurrentPointer, stateFile, writeCurrentPointer } from './paths.js'
+import { clearCurrentPointer, defaultRoot, ensureLayout, readCurrentPointer, stateFile, writeCurrentPointer } from './paths.js'
 import { DEFAULT_FACADE_PORT, DEFAULT_SERVER_PORT } from './constants.js'
 import type { PersistedState } from './types.js'
 
@@ -194,6 +194,7 @@ export class StateStore {
    */
   setCurrentVersion(version: string | null, options: { fallbackFrom?: string | null } = {}): void {
     if (version === null) {
+      clearCurrentPointer(this.root)
       this.patch({ currentVersion: null, server: { effectivePort: null } })
       return
     }

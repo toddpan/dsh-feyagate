@@ -25,7 +25,7 @@
  * get a fresh free trial.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -114,6 +114,17 @@ export function readCurrentPointer(root: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Remove the `current` pointer.
+ *
+ * The pointer is the tiebreaker read at startup, so a state that says "nothing
+ * is current" while the pointer still names a version would be silently
+ * overridden back to that version on the next boot.
+ */
+export function clearCurrentPointer(root: string): void {
+  rmSync(currentPointerPath(root), { force: true })
 }
 
 export function writeCurrentPointer(root: string, version: string): void {

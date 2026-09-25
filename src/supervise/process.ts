@@ -36,6 +36,7 @@ import {
   STOP_GRACE_MS,
 } from '../constants.js'
 import { applyEffectivePort, applyWebuiDir, generateConfig } from '../config-gen.js'
+import { CHILD_OUTPUT_TAIL_LINES } from '../constants.js'
 import { type LogBuffer } from '../log.js'
 import { binaryName, type PlatformTag } from '../util/platform.js'
 import { configPath, versionDir } from '../paths.js'
@@ -90,6 +91,21 @@ export class Supervisor {
   private lastError: string | null = null
   /** Set while an upgrade is swapping versions, so exit events are expected. */
   private upgradeInFlight = false
+  /**
+   * True between spawning and the first successful health probe.
+   *
+   * A child that dies during startup has *not* "crashed after running" — it
+   * never ran. Without this flag the exit would be attributed to a runtime crash
+   * and the supervisor would schedule a backoff restart for a process that
+   * cannot possibly come up, turning one bad install into a restart loop.
+   */
+  private starting = false
+  /** Why the current startup ended, when the child died instead of answering. */
+  private startFailure: string | null = null
+  /** Last lines the child printed; carried into the error so the cause is visible. */
+  private childOutput: string[] = []
+  /** Aborts the health wait as soon as the child is known to be gone. */
+  private startAbort: AbortController | null = null
 
   constructor(options: SupervisorOptions) {
     this.root = options.root
@@ -259,6 +275,10 @@ export class Supervisor {
     this.log.info(`启动后台服务 v${version}（端口 ${port}）：${binary}`)
     this.stopping = false
     this.lastError = null
+    this.starting = true
+    this.startFailure = null
+    this.childOutput = []
+    this.startAbort = new AbortController()
 
     const child = spawn(binary, ['--config', configPath(this.root)], {
       // cwd is the root, because the config file lives there and the child
@@ -295,15 +315,24 @@ export class Supervisor {
     }
 
     const healthy = await waitForHealthy(port, {
+      // Without the signal a process that died in 20 ms still costs the full
+      // ~20 second budget, and the user watches a spinner for a failure that was
+      // already known.
+      signal: this.startAbort.signal,
       onAttempt: (attempt) => {
         if (attempt % 6 === 0) this.log.info(`等待后台服务就绪…（${attempt} 次探测）`)
       },
     })
 
+    this.starting = false
     if (!healthy) {
-      const error = `后台服务启动后未能在超时时间内通过健康检查（端口 ${port}）`
+      const cause = this.diagnosticLine()
+      const error =
+        this.startFailure === null
+          ? `后台服务启动后未能在超时时间内通过健康检查（端口 ${port}）${cause === null ? '' : `：${cause}`}${this.startupDetail()}`
+          : `${this.startFailure}${cause === null ? '' : `；${cause}`}${this.startupDetail()}`
       this.lastError = error
-      this.log.error(error)
+      this.log.error(error.split('\n')[0]!)
       await this.stop()
       this.onChange()
       return { ok: false, port, error, adopted: false }
@@ -324,7 +353,34 @@ export class Supervisor {
       if (line === '') continue
       if (level === 'warn' && /error|fail|fatal/i.test(line)) this.log.error(line, 'server')
       else this.log.push(level, 'server', line)
+      if (this.starting) {
+        this.childOutput.push(line)
+        // A bounded ring: a chatty child must not grow this without limit, and
+        // only the tail matters for diagnosing why a startup failed.
+        if (this.childOutput.length > CHILD_OUTPUT_TAIL_LINES) this.childOutput.shift()
+      }
     }
+  }
+
+  /**
+   * The single most diagnostic line the child printed.
+   *
+   * Chosen so the UI's 60-character "原因" line carries the real cause rather
+   * than a generic prefix: for a `dyld: Library not loaded` failure the useful
+   * text is that line, not "后台服务启动后立即退出".
+   */
+  private diagnosticLine(): string | null {
+    const interesting = this.childOutput.find((line) =>
+      /library not loaded|not loaded|no such file|shared librar|symbol not found|cannot open|permission denied|fatal|error/i.test(line),
+    )
+    return interesting ?? this.childOutput[0] ?? null
+  }
+
+  /** Human detail appended to a startup failure: the top cause plus the raw tail. */
+  private startupDetail(): string {
+    const tail = this.childOutput.slice(-CHILD_OUTPUT_TAIL_LINES)
+    if (tail.length === 0) return ''
+    return `\n服务自身输出（最后 ${tail.length} 行）：\n${tail.join('\n')}`
   }
 
   private handleExit(version: string, code: number | null, signal: NodeJS.Signals | null): void {
@@ -333,7 +389,19 @@ export class Supervisor {
     rmSync(this.pidFile(), { force: true })
 
     if (this.disposed || this.stopping) {
+      this.starting = false
       this.log.info(`后台服务已停止（code ${code ?? '-'}，signal ${signal ?? '-'}）`)
+      this.onChange()
+      return
+    }
+
+    if (this.starting) {
+      // Died before it ever answered. Record why and stop waiting instead of
+      // entering the crash-restart path: a binary that cannot start will not
+      // start on the third attempt either.
+      this.startFailure = `后台服务启动后立即退出（code ${code ?? '-'}，signal ${signal ?? '-'}）`
+      this.log.error(this.startFailure)
+      this.startAbort?.abort()
       this.onChange()
       return
     }

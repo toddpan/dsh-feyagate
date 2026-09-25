@@ -175,7 +175,12 @@ export class InstallService {
         )
       }
 
-      if (options.reinstall !== true && previousVersion === version) {
+      // "Already the current version" only justifies doing nothing when that
+      // version is actually up. A failed activation can leave `currentVersion`
+      // naming a version that never started, and short-circuiting there would
+      // report success without installing anything — the one answer a user
+      // cannot act on. Requiring a live child keeps the no-op honest.
+      if (options.reinstall !== true && previousVersion === version && this.supervisor.pid !== null) {
         return { noop: true, message: `v${version} 已是当前版本，无需安装` }
       }
 
@@ -196,6 +201,7 @@ export class InstallService {
       // running, and on every platform a half-swapped tree is worse than a gap.
       this.supervisor.setUpgradeInFlight(true)
       let started: { ok: boolean; error: string | null } = { ok: false, error: null }
+      let activationFailed = false
       try {
         await this.supervisor.stop()
 
@@ -244,6 +250,7 @@ export class InstallService {
         }
         return { message: `v${version} 已安装并运行` }
       } catch (error) {
+        activationFailed = true
         // Never leave the machine with nothing running: put the previous version
         // back, whether we failed or the user cancelled.
         if (started.ok !== true && previousVersion !== null && this.installed().includes(previousVersion) && previousVersion !== version) {
@@ -257,6 +264,24 @@ export class InstallService {
         }
         throw error
       } finally {
+        if (activationFailed) {
+          // This activation is over and it did not succeed.
+          //
+          // `currentVersion` was pointed at `version` before the start attempt,
+          // so it must stop claiming it: otherwise the UI shows a current version
+          // that is neither installed nor running, and the next attempt at that
+          // same version short-circuits as "已是当前版本" — success reported,
+          // nothing done.
+          if (this.state.get().currentVersion === version) {
+            const good = this.state.get().lastKnownGood
+            this.state.setCurrentVersion(good !== null && this.installed().includes(good) ? good : null)
+          }
+          // `pending` means "an activation was in flight and we never learned how
+          // it ended". We just learned: it failed. Leaving the marker behind would
+          // tell the next boot that DSH died mid-activation and send it down the
+          // recovery path for a failure that is already understood.
+          if (this.state.get().pending?.version === version) this.state.patch({ pending: null })
+        }
         this.supervisor.setUpgradeInFlight(false)
       }
     })

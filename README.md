@@ -281,12 +281,13 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 
 | 症状 | 可能原因 | 处理 |
 |---|---|---|
+| 启动时提示 `feyagate-gateway … did not activate` / `failed to import` | 装的是**源码目录或 git 依赖**，而 `lib/` 是构建产物、不在仓库里；宿主 `import` 不到入口 | 在该包目录跑 `npm install && npm run build`（`prepare` 脚本会在 `npm install` 时自动构建；`dsh plugin add <本地路径>` 用 `link:` 语义、不会触发它）。npm 安装的正式包自带 `lib/`，不受影响 |
 | 工具列表里没有 `mcp__feyagate__*` | ① 插件没装进当前 profile；② MCP 桥行没生效；③ 桥连不上门面（门面端口被改但没有重启 DSH） | ① `dsh plugin --profile <p> why @dsh-external/dsh-feyagate-gateway`；② 检查 profile 的 bundle 列表里有没有本插件；③ 设置 › 飞阳网关 › 服务 看状态条，重启 DSH 让 patch 重新求值 |
 | 工具列表里**有**工具但调用失败 | 后台服务没起 / 正在升级 / 门面还没代理到子进程 | 看状态条：`未安装` → 点安装；`异常` → 看日志；`升级中` → 等 10–20 秒 |
 | 服务起不来：**端口被占用** | HTTP 端口被别的进程占了（常见：另一份 miloco / 既有 `~/.feyagate` 安装） | 界面报 `FG-PORT-001` 并给出占用 PID；点「换一个端口」（插件会在 20 个端口内漂移）或结束占用进程 |
 | 服务起不来：**macOS 未签名被拦** | Gatekeeper 拦下未公证的第三方二进制 | 界面报 `FG-PERM-001`，给两条路：系统设置 › 隐私与安全性 ›「仍要打开」，或复制 `xattr -dr com.apple.quarantine <安装目录>/versions/<ver>/miloco-mcp-server`。受 MDM 管理的机器绕不过去 |
-| 服务起不来：**依赖缺失** | Linux 产物是动态链接（`libssl3` / `libyaml-cpp0.7` / `libfmt8` / `libavcodec58` 等）；华为控制还额外需要 `libmosquitto` | 按日志里的 `cannot open shared object file` 装缺的包；华为命令通道缺失时是**降级**不是故障：状态显示"华为设备控制不可用"，`brew install mosquitto` 后重启服务 |
-| 服务起不来：**健康检查超时** | 60 秒内 `/health` 无 2xx（端口冲突 / 被安全策略拦 / 依赖缺失三类之一） | 报 `FG-BOOT-001`，界面给「查看日志 / 换端口重试 / 重新安装」三个出口；不要只看转圈，日志末行一定有原因 |
+| 服务起不来：**依赖缺失** | 上游产物漏带运行库。**已实测**：`mac-arm64 v1.2.20` 的二进制声明依赖 `lib/libyaml-cpp.0.9.dylib`、`libavcodec.62.dylib`、`libavutil.60.dylib`、`libswscale.9.dylib`，而归档里只有 `libmiot_camera_lite.dylib` —— dyld 立即中止，进程活不过 20 毫秒 | 插件报 `FG-PKG-004`「安装包缺少运行库」，**并在同一条错误里附上子进程自己打印的 dyld 原文**（折叠在「技术细节」）。这是上游发布包的问题，换一个版本或等上游修；Linux 侧是否有同类缺失**尚未实测**，按日志里的 `error while loading shared libraries` 判断。华为控制另需 `libmosquitto`，缺失时是**降级**不是故障（`brew install mosquitto` 后重启服务） |
+| 服务起不来：**健康检查超时** | 20 秒内 `/health` 无 2xx（端口冲突 / 被安全策略拦 / 依赖缺失三类之一） | 报 `FG-BOOT-001`，界面给「查看日志 / 换端口重试 / 重新安装」三个出口；不要只看转圈，日志末行一定有原因。**子进程若在就绪前就退出，插件立刻失败并把它最后 12 行输出一起报出来**，不会再让你等满 20 秒；启动期退出也不会进入崩溃重启循环 |
 | **GitHub 不可达** | 代理 / 防火墙 / 企业策略拦了 `github.com` | 触发多源降级：GitHub Releases → FOTA（`oneapi.sooncore.com/ota/fota.json`，带 md5）→ 可配置镜像 → 本地包。界面报 `FG-NET-001`，给「重试 / 改用镜像地址 / 复制诊断信息」 |
 | **校验失败** | 下载不完整、代理缓存了坏文件，或资产没有 sha256 sidecar | `FG-PKG-001`：插件**删除已下载文件并中止**，文案直接给出"期望 vs 实际"的摘要。`FG-NET-004`：服务器没提供校验文件 → 出于安全**不会安装**，需要换源或走本地包；清单里 `sha256: null` 的资产必须由你显式确认才装 |
 | **摄像头功能不可用** | ① Windows 平台不支持（依赖米家 P2P 协议库，只支持 macOS / Linux）；② 米家未登录；③ 小米专有库 `libmiot_camera_lite` 在上游包里缺失 | ①②界面会直接说明并给动作；③显示为「**降级运行 + 原因**」：摄像头不可用，其它平台照常工作 |
@@ -319,7 +320,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 - 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
 - **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
 - **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）。
-- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 136 项断言。
+- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **125 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 77 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
 - 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
 - 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
@@ -387,10 +388,10 @@ app/dsh-feyagate/
 | `scripts/selfcheck-download.mjs` | 下载/校验/解压层的单元自检（用构造出来的归档，不联网）：校验失败必须删掉坏包且绝不落位、无校验值默认拒绝、顶层目录上移、找不到二进制时报错而不是静默成功 |
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
-| `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 卸载保数据（54 项断言） |
+| `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 卸载保数据 → 启动即失败（77 项断言） |
 | `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
 | `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 |
-| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（136 项断言） |
+| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（125 项计数断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |
 | `npm run build:client` | 只跑 tsdown，快速迭代浏览器半侧 |
 
@@ -417,7 +418,7 @@ app/dsh-feyagate/
 
 ### 已经实测过的部分
 
-`npm test` 全绿（24 + 19 + 54 项断言，另有下载层 5 项自检）。具体覆盖：
+`npm test` 全绿（24 + 19 + 77 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
 
 | 验证对象 | 证据 |
 |---|---|

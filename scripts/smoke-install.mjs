@@ -219,6 +219,28 @@ copyFileSync(zipPath, corruptPath)
 const nocsumPath = join(base, 'archives', `miloco-mcp-server-mac-arm64-v${NOCSUM_VERSION}.zip`)
 copyFileSync(zipPath, nocsumPath)
 
+// A payload that cannot start at all. The real mac-arm64 v1.2.20 release is
+// exactly this shape: the binary links `@executable_path/lib/*.dylib` and the
+// archive ships only lib/libmiot_camera_lite.dylib, so dyld aborts the process
+// within milliseconds of spawn.
+const BROKEN_VERSION = '9.9.5'
+const brokenPath = join(base, 'archives', `miloco-mcp-server-mac-arm64-v${BROKEN_VERSION}.zip`)
+{
+  const brokenName = `miloco-mcp-server-mac-arm64-v${BROKEN_VERSION}`
+  const brokenStage = join(base, 'stage-broken', brokenName)
+  mkdirSync(brokenStage, { recursive: true })
+  writeFileSync(
+    join(brokenStage, 'miloco-mcp-server'),
+    '#!/bin/sh\n' +
+      'echo "dyld[4711]: Library not loaded: @executable_path/lib/libyaml-cpp.0.9.dylib" >&2\n' +
+      'echo "  Referenced from: /tmp/miloco-mcp-server" >&2\n' +
+      'echo "  Reason: tried: /private/tmp/lib/libyaml-cpp.0.9.dylib (no such file)" >&2\n' +
+      'exit 1\n',
+  )
+  chmodSync(join(brokenStage, 'miloco-mcp-server'), 0o755)
+  await run('zip', ['-q', '-r', brokenPath, brokenName], { cwd: join(base, 'stage-broken') })
+}
+
 // Local archives are addressed by a single setting, so each step points it at the
 // file it means to install. `asset()` therefore has to be told which path to hash.
 function assetFor(file, kind, hashPath, manifestSha) {
@@ -252,6 +274,7 @@ writeFileSync(
         [TAR_VERSION]: { releaseTag: `v${TAR_VERSION}`, publishedAt: '2025-12-01T00:00:00Z', assets: { 'mac-arm64': [assetFor(tarName, 'tar.gz', tarPath, tarSha)] } },
         [NOCSUM_VERSION]: { releaseTag: `v${NOCSUM_VERSION}`, publishedAt: '2025-11-01T00:00:00Z', assets: { 'mac-arm64': [assetFor(`miloco-mcp-server-mac-arm64-v${NOCSUM_VERSION}.zip`, 'zip', nocsumPath, null)] } },
         [CORRUPT_VERSION]: { releaseTag: `v${CORRUPT_VERSION}`, publishedAt: '2025-10-01T00:00:00Z', assets: { 'mac-arm64': [assetFor(`miloco-mcp-server-mac-arm64-v${CORRUPT_VERSION}.zip`, 'zip', corruptPath, zipSha)] } },
+        [BROKEN_VERSION]: { releaseTag: `v${BROKEN_VERSION}`, publishedAt: '2025-09-01T00:00:00Z', assets: { 'mac-arm64': [assetFor(`miloco-mcp-server-mac-arm64-v${BROKEN_VERSION}.zip`, 'zip', brokenPath, sha256(brokenPath))] } },
       },
     },
     null,
@@ -541,6 +564,81 @@ console.log('\n— 8. 卸载保留 data/')
   check('状态回到未安装', state().currentVersion === null, `current=${state().currentVersion}`)
   const after = await waitForState('not-installed', 15_000)
   check('状态报告未安装', after?.state === 'not-installed', `state=${after?.state} detail=${after?.detail ?? ''}`)
+}
+
+// ───────────── 9. a payload that cannot start fails fast, quoting its own output
+
+console.log('\n— 9. 启动即失败：快速失败并带出子进程输出')
+{
+  // The synthetic releases live behind example.invalid, so the payload is
+  // delivered through the same "local archive" source the other steps use.
+  await fetchJson(`${apiBase}/settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ localArchive: brokenPath }),
+  })
+
+  // `restarts` is cumulative for the whole run and step 7 deliberately kills a
+  // child, so the guard below has to compare against a baseline.
+  const restartsBefore = (await status())?.restarts ?? 0
+
+  const started = Date.now()
+  const response = await fetchJson(`${apiBase}/install`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ version: BROKEN_VERSION }),
+  })
+  check('安装任务被接受', response.body?.ok === true, response.body?.error)
+
+  let job = null
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    const current = await fetchJson(`${apiBase}/jobs/current`)
+    job = current.body?.data?.job ?? null
+    if (job !== null && ['done', 'failed', 'cancelled'].includes(job.phase)) break
+    await sleep(200)
+  }
+  const elapsed = Date.now() - started
+  const error = job?.error ?? ''
+
+  check('安装判定为失败', job?.phase === 'failed', `phase=${job?.phase}`)
+  check('指出进程启动后退出', /立即退出/.test(error), `error=${error.slice(0, 160)}`)
+  // A child that died in milliseconds must not consume the ~20s health budget
+  // before the user is told anything.
+  check('未等满健康检查预算', elapsed < 15_000, `耗时 ${elapsed} ms`)
+  // The child's own words are the actionable part. "健康检查超时" alone sends the
+  // user looking at ports and firewalls instead of at the package.
+  check('带出子进程的错误输出', /Library not loaded/.test(error), `error=${error.slice(0, 160)}`)
+  check('附上服务自身输出的若干行', /服务自身输出/.test(error), `error=${error.slice(0, 160)}`)
+
+  const after = await waitForState('stopped', 20_000)
+  check('失败后不处于运行中', after?.state !== 'running' && after?.healthy !== true, `state=${after?.state}`)
+
+  // A version that never started must not stay recorded as the current one.
+  // Leaving it there made the UI claim a current version that was neither
+  // installed nor running, and made every later attempt at that version
+  // short-circuit as "已是当前版本" — success reported, nothing done.
+  check('失败版本不再被记为当前版本', state().currentVersion !== BROKEN_VERSION, `current=${state().currentVersion}`)
+  check('current 指针已清除', !existsSync(join(base, 'root', 'current')), '指针会在启动时覆盖状态字段')
+  // `pending` means "an activation was in flight and we never learned how it
+  // ended". A known failure must not leave that marker for the next boot.
+  check('失败后不留 pending 标记', state().pending === null, `pending=${JSON.stringify(state().pending)}`)
+
+  // The retry is the point: it must actually try again, not report a no-op.
+  const retry = await install({ version: BROKEN_VERSION })
+  check('同版本重试不是静默空操作', retry.job?.noop !== true, `noop=${retry.job?.noop}`)
+  check('同版本重试仍然如实失败', retry.job?.phase === 'failed', `phase=${retry.job?.phase}`)
+
+  // The startup guard: a binary that cannot start must not be handed to the
+  // crash-restart path, or a single bad package becomes a restart loop.
+  // Read the runtime status, not state.json — restart counters live in memory.
+  await sleep(4000)
+  const calm = await status()
+  check(
+    '启动失败不进入自动重启',
+    (calm?.restarts ?? 0) === restartsBefore,
+    `restarts ${restartsBefore} → ${calm?.restarts ?? 0}`,
+  )
 }
 
 // ──────────────────────────────────────────────────────────── teardown

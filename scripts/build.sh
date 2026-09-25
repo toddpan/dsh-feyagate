@@ -70,6 +70,13 @@ const allowed = new Set([
 const required = new Set([...code.matchAll(/require\("([^"]+)"\)/g)].map((match) => match[1]));
 const unknown = [...required].filter((id) => !allowed.has(id));
 if (unknown.length) problems.push("require 了平台未提供的模块：" + unknown.join(", "));
+// Diagnosis rules are matched in array order, so a specific rule placed after a
+// generic one is dead code. A missing shared library reports an archive name that
+// ends in ".zip", which the generic packaging rule would otherwise claim.
+const missingLib = code.indexOf("FG-PKG-004");
+const genericArchive = code.indexOf("FG-PKG-002");
+if (missingLib < 0) problems.push("缺少「安装包缺少运行库」(FG-PKG-004) 诊断规则");
+else if (genericArchive >= 0 && missingLib > genericArchive) problems.push("FG-PKG-004 排在通用解压规则之后，永远不会命中");
 if (problems.length) {
   console.error("lib/client.js 不满足前端加载契约：" + problems.join("；"));
   process.exit(1);

@@ -59,6 +59,9 @@ export const DOWNLOAD_RETRIES = 2
 
 /** Log ring buffer handed to the UI. */
 export const LOG_BUFFER_LINES = 800
+/** How many trailing child-output lines a startup failure carries into its error. */
+export const CHILD_OUTPUT_TAIL_LINES = 12
+
 export const LOG_FORWARD_LINES = 400
 
 /**

@@ -185,6 +185,15 @@ const RULES: Array<{ test: RegExp; code: string; conclusion: string; cause: (raw
   { test: /超时|timeout|ETIMEDOUT/i, code: 'FG-NET-002', conclusion: '下载超时', cause: (raw) => raw, actions: ['重试', '改用镜像'] },
   { test: /中断|aborted|ECONNRESET/i, code: 'FG-NET-003', conclusion: '下载中断', cause: (raw) => raw, actions: ['重试'] },
   {
+    // Must precede the `zip|tar` rule below: the failing archive's name ends in
+    // `.zip`, so a generic packaging rule would claim this and hide the real cause.
+    test: /Library not loaded|dyld|image not found|error while loading shared libraries|cannot open shared object file/i,
+    code: 'FG-PKG-004',
+    conclusion: '安装包缺少运行库',
+    cause: (raw) => raw,
+    actions: ['换一个版本', '查看技术细节'],
+  },
+  {
     test: /sha256|校验|md5|指纹/i,
     code: 'FG-PKG-001',
     conclusion: '安装包校验未通过',

@@ -38,6 +38,9 @@ export interface RuntimeOptions {
   version: string
   /** Install root override; the state store applies its own default when absent. */
   root?: string
+  /** Hung-child watchdog timing; overridable so tests need not wait 45 seconds. */
+  watchdogIntervalMs?: number
+  watchdogFailures?: number
 }
 
 export class GatewayRuntime {
@@ -84,6 +87,8 @@ export class GatewayRuntime {
       onChange: () => {
         void this.afterSupervisorChange()
       },
+      watchdogIntervalMs: options.watchdogIntervalMs,
+      watchdogFailures: options.watchdogFailures,
     })
     this.facade = new McpFacade({
       state: this.state,
@@ -91,7 +96,11 @@ export class GatewayRuntime {
       version: options.version,
       // Read on every request, which is what makes the child's port a runtime
       // detail rather than something baked into the profile patch.
-      childPort: () => this.state.get().server.effectivePort,
+      // Prefer what this supervisor actually knows over the shared state file:
+      // `state.json` is machine-wide, so another DSH instance can overwrite
+      // `effectivePort` with the port of *its* child while ours is the one this
+      // facade must reach.
+      childPort: () => this.supervisor?.effectivePortValue ?? this.state.get().server.effectivePort,
       // The facade consults this when a stream opens, so a bridge that
       // connects after the child is already healthy gets an immediate
       // `list_changed` instead of an empty tool list for the whole session.

@@ -36,6 +36,8 @@ import {
   PORT_SCAN_RANGE,
   RESTART_BACKOFF_MS,
   STOP_GRACE_MS,
+  WATCHDOG_FAILURES,
+  WATCHDOG_INTERVAL_MS,
 } from '../constants.js'
 import { applyEffectivePort, applyWebuiDir, generateConfig } from '../config-gen.js'
 import { CHILD_OUTPUT_TAIL_LINES } from '../constants.js'
@@ -52,6 +54,18 @@ interface PidRecord {
   port: number
   version: string
   startedAt: number
+  /**
+   * The DSH process that started (or took over) this child.
+   *
+   * The install root is machine-wide, so several DSH instances can share one pid
+   * file. The owner is the instance allowed to replace a hung child; everyone
+   * else is a guest and must leave it alone — otherwise two instances each see
+   * "not answering" and take turns killing the other's process.
+   *
+   * Absent in files written by older versions: those are treated as unowned (any
+   * instance may restart them), which is the pre-ownership behaviour.
+   */
+  ownerPid?: number
 }
 
 export interface SupervisorOptions {
@@ -61,6 +75,13 @@ export interface SupervisorOptions {
   log: LogBuffer
   /** Notified whenever the observable status changes (start/stop/crash). */
   onChange?: () => void
+  /**
+   * How often the hung-child watchdog probes, and how many consecutive misses
+   * mean "restart". Defaults come from `constants.ts`; overridable so tests can
+   * exercise the watchdog without waiting 45 seconds.
+   */
+  watchdogIntervalMs?: number
+  watchdogFailures?: number
 }
 
 export interface SpawnOutcome {
@@ -77,10 +98,16 @@ export class Supervisor {
   private readonly state: StateStore
   private readonly log: LogBuffer
   private readonly onChange: () => void
+  private readonly watchdogIntervalMs: number
+  private readonly watchdogFailureLimit: number
 
   private child: ChildProcess | null = null
   private adoptedPid: number | null = null
   private adoptedVersion: string | null = null
+  /** True when the adopted child belongs to another live DSH instance (see `PidRecord`). */
+  private guestOfForeignOwner = false
+  /** Set once, so a guest does not repeat the same warning every watchdog tick. */
+  private warnedForeignOwner = false
   private effectivePort: number | null = null
   private startedAt: number | null = null
   private stopping = false
@@ -115,6 +142,8 @@ export class Supervisor {
     this.state = options.state
     this.log = options.log
     this.onChange = options.onChange ?? (() => {})
+    this.watchdogIntervalMs = options.watchdogIntervalMs ?? WATCHDOG_INTERVAL_MS
+    this.watchdogFailureLimit = options.watchdogFailures ?? WATCHDOG_FAILURES
   }
 
   private pidFile(): string {
@@ -253,11 +282,40 @@ export class Supervisor {
     this.adoptedVersion = record.version
     this.effectivePort = record.port
     this.startedAt = record.startedAt || Date.now()
+    this.guestOfForeignOwner = this.foreignOwnerAlive(record)
     this.state.patch({ server: { effectivePort: record.port } })
-    this.log.info(`已接管此前运行中的后台服务（pid ${record.pid}，端口 ${record.port}，版本 ${record.version}）`)
+    if (this.guestOfForeignOwner) {
+      this.log.info(
+        `已接管此前运行中的后台服务（pid ${record.pid}，端口 ${record.port}，版本 ${record.version}）—— 属主是另一个 DSH 实例（pid ${record.ownerPid}），只在必要时替它重启`,
+      )
+    } else {
+      // Nobody alive owns it (previous DSH gone, or an older pid file): we take
+      // ownership, so a hung child can be replaced by us from here on.
+      writeJsonAtomic(this.pidFile(), { ...record, ownerPid: process.pid } satisfies PidRecord)
+      this.log.info(`已接管此前运行中的后台服务（pid ${record.pid}，端口 ${record.port}，版本 ${record.version}）并成为属主`)
+    }
     this.startWatchdog()
     this.onChange()
     return { ok: true, port: record.port, error: null, adopted: true }
+  }
+
+  /** True when the record names a live owner that is not this process. */
+  private foreignOwnerAlive(record: PidRecord): boolean {
+    const owner = record.ownerPid
+    if (owner === undefined || owner === process.pid) return false
+    return this.isAlive(owner)
+  }
+
+  /**
+   * Whether the currently supervised process belongs to another live instance.
+   *
+   * Trusts the pid file when it still describes our child, and falls back to what
+   * we recorded at adoption time (the owner may have rewritten the file).
+   */
+  private ownedByForeignInstance(): boolean {
+    const record = this.readPidFile()
+    if (record !== null && this.pid !== null && record.pid === this.pid) return this.foreignOwnerAlive(record)
+    return this.guestOfForeignOwner
   }
 
   /** Poll `/health` until it answers, the budget runs out, or we are disposed. */
@@ -342,6 +400,9 @@ export class Supervisor {
         port,
         version,
         startedAt: Date.now(),
+        // We started it, so we own it: another instance sharing this root must
+        // not replace it behind our back.
+        ownerPid: process.pid,
       } satisfies PidRecord)
       this.startedAt = Date.now()
     }
@@ -418,6 +479,9 @@ export class Supervisor {
   private handleExit(version: string, code: number | null, signal: NodeJS.Signals | null): void {
     this.child = null
     this.startedAt = null
+    // The process we adopted is gone, so we are nobody's guest any more.
+    this.guestOfForeignOwner = false
+    this.warnedForeignOwner = false
     rmSync(this.pidFile(), { force: true })
 
     if (this.disposed || this.stopping) {
@@ -489,8 +553,21 @@ export class Supervisor {
           return
         }
         this.watchdogFailures += 1
-        if (this.watchdogFailures < 3) return
+        if (this.watchdogFailures < this.watchdogFailureLimit) return
         this.watchdogFailures = 0
+        // Another live DSH instance started this process. It is the one allowed
+        // to replace it: killing it here is how two instances end up taking
+        // turns killing each other's child. The status stays honestly unhealthy;
+        // if that instance fixes (or drops) its process, we recover on our own —
+        // and if its owner disappears, the next tick may restart it.
+        if (this.ownedByForeignInstance()) {
+          this.lastError = '后台服务无响应，但它属于另一个仍在运行的 DSH 实例（本实例不重启别人的进程）'
+          if (!this.warnedForeignOwner) {
+            this.warnedForeignOwner = true
+            this.log.warn(this.lastError)
+          }
+          return
+        }
         this.lastError = '后台服务无响应（连续 3 次健康检查失败），正在重启'
         this.log.error(this.lastError)
         const pid = this.pid
@@ -502,7 +579,7 @@ export class Supervisor {
         }
         void this.ensureStarted()
       })()
-    }, 15_000)
+    }, this.watchdogIntervalMs)
     this.watchdogTimer.unref?.()
   }
 
@@ -548,6 +625,8 @@ export class Supervisor {
     this.adoptedPid = null
     this.adoptedVersion = null
     this.startedAt = null
+    this.guestOfForeignOwner = false
+    this.warnedForeignOwner = false
     rmSync(this.pidFile(), { force: true })
     this.state.patch({ server: { effectivePort: null } })
     this.stopping = false

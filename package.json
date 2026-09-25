@@ -46,7 +46,7 @@
     "smoke:install": "node scripts/smoke-install.mjs",
     "test": "npm run build && npm run check && npm run check:runtime && npm run smoke:install",
     "check:download": "node scripts/selfcheck-download.mjs",
-    "check:runtime": "npm run check:download && node scripts/smoke.mjs --offline"
+    "check:runtime": "npm run check:download && node scripts/smoke.mjs --offline && node scripts/check-supervise-ownership.mjs"
   },
   "exports": {
     ".": {

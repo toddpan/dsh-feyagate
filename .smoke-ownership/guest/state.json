@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "root": "/Users/tsbj/feyanggit/ha-esp32-pro/app/dsh-feyagate/.smoke-ownership/guest",
+  "currentVersion": "9.9.9",
+  "lastKnownGood": null,
+  "pending": {
+    "version": "9.9.9",
+    "startedAt": 1790335645410
+  },
+  "server": {
+    "port": 38080,
+    "effectivePort": null,
+    "autoStart": true
+  },
+  "facade": {
+    "port": 38081
+  },
+  "flags": {}
+}

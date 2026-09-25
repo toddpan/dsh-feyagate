@@ -57,6 +57,14 @@ export interface FeyagateConfig {
    * `$DSH_HOME/dsh-feyagate`, then `~/.dsh/dsh-feyagate`.
    */
   installRoot?: string
+  /**
+   * Hung-child watchdog timing (defaults: probe every 15s, restart after 3
+   * consecutive misses). Exposed so the test suite can exercise the watchdog
+   * without waiting 45 seconds, and so a user with an unusual gateway can tune
+   * it — it is not a normal setting.
+   */
+  watchdogIntervalMs?: number
+  watchdogFailures?: number
 }
 
 /** Read our own version from package.json without a JSON import or a build flag. */
@@ -82,7 +90,12 @@ function jsonForScript(value: unknown): string {
 
 export async function apply(ctx: FeyagateContext, config: FeyagateConfig = {}): Promise<void> {
   const version = readPluginVersion()
-  const runtime = new GatewayRuntime({ version, root: resolveRoot(config.installRoot) })
+  const runtime = new GatewayRuntime({
+    version,
+    root: resolveRoot(config.installRoot),
+    watchdogIntervalMs: config.watchdogIntervalMs,
+    watchdogFailures: config.watchdogFailures,
+  })
 
   ctx.logger?.info(`[${name}] ${runtime.describe()}`)
 

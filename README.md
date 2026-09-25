@@ -319,8 +319,8 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 - **全新克隆的入口只有一条命令**：`npm install && npm test`。`lib/` 是构建产物、不在仓库里，所以下面那些依赖 `lib/` 的检查必须先 `npm run build`；`npm test` 已经包含构建。
 - 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
 - **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
-- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）。
-- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **138 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 90 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
+- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）+ 属主/看门狗（`check-supervise-ownership.mjs`）。
+- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **148 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 90 安装生命周期 + 10 属主/看门狗），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
 - 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
 - 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
@@ -389,11 +389,12 @@ app/dsh-feyagate/
 | `scripts/verify-manifest.mjs` | CI 校验：清单自洽（资产 URL 与文件名一致、`channel` 指向存在的资产、`pluginCompat` 区间合法） |
 | `scripts/selfcheck-download.mjs` | 下载/校验/解压层的单元自检（用构造出来的归档，不联网）：校验失败必须删掉坏包且绝不落位、无校验值默认拒绝、顶层目录上移、找不到二进制时报错而不是静默成功 |
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
+| `scripts/check-supervise-ownership.mjs` | 属主与看门狗：pid 文件写明属主时**访客不得杀掉别人的子进程**（只如实报告），属主消失后才允许替换，无人拥有的会被接管并登记自己为属主（10 项断言，用快速看门狗参数，约 3 秒） |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
 | `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 接管未就绪进程 → 卸载保数据 → 启动即失败（90 项断言） |
 | `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
 | `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 |
-| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（138 项计数断言） |
+| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（148 项计数断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |
 | `npm run build:client` | 只跑 tsdown，快速迭代浏览器半侧 |
 
@@ -421,7 +422,7 @@ app/dsh-feyagate/
 
 ### 已经实测过的部分
 
-`npm test` 全绿（24 + 19 + 90 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
+`npm test` 全绿（24 + 19 + 90 + 10 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
 
 | 验证对象 | 证据 |
 |---|---|
@@ -436,6 +437,7 @@ app/dsh-feyagate/
 | 启动 → 健康检查 → 门面转发真实工具列表 → REST `{code,data}` 解包 | `scripts/smoke-install.mjs` 第 1 节 |
 | 升级后回滚目标仍然可用、回滚后服务健康 | `scripts/smoke-install.mjs` 第 2–3 节 |
 | 子进程被 `SIGKILL` 后自动拉起（换 pid、重启计数 +1） | `scripts/smoke-install.mjs` 第 7 节 |
+| pid 文件写明属主时，**访客不杀别人的子进程**；属主消失后才替换；无人拥有的接管后登记自己为属主 | `scripts/check-supervise-ownership.mjs` 10/10（用 `watchdogIntervalMs`/`watchdogFailures` 把 45 秒压缩到约 3 秒） |
 | **接管尚未就绪的进程，而不是杀掉它重启**（共享安装根下多实例互杀的回归） | `scripts/smoke-install.mjs` 第 8 节：pid 文件指向一个「1.5 秒后才应答 `/health`」的进程，启动后必须**等到它健康并接管**，且该进程**不能被 SIGTERM** |
 | 卸载删除版本目录但**保留 `data/`** | `scripts/smoke-install.mjs` 第 9 节 |
 | **重装**必须真的重装（默认幂等会让它静默变成空操作），且不得把当前版本悄悄换成别的版本 | `scripts/smoke-install.mjs` 第 6 节：先把已安装的程序改坏，重装后逐字节恢复、服务重新健康、版本未变 |
@@ -461,7 +463,7 @@ mac-arm64 `v1.2.20`，从 GitHub Releases 真下载 **6,901,681 字节**，本�
 3. `dsh.client.inject` 只列 `@deepseek-ai/dsh-client-ui-slots`，而 [`tsdown.config.ts`](tsdown.config.ts) 允许外部化的名单有 8 项（`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`-client-store`、`-client-ui-slots`、`-client-ui-primitives`）。这是**有意的不对称**：外部化名单是"允许留成裸 require 的上限"，`inject` 是"实际依赖的清单"，而 `client/index.tsx` 刻意不引 primitives。**如果界面以后开始引 primitives 或 store，必须同步加进 `inject`**，否则前端加载会失败。
 4. ~~`server.ws_port` 无常量~~ **已修正**：新增 `DEFAULT_WS_PORT`（`constants.ts`），`config-gen.ts` 引用它。它不暴露在界面上 —— 插件自身不跑 WebSocket（MCP 桥走 Streamable HTTP），但子进程要求该字段存在。
 5. `huawei.device_id` / `device_name`：子进程读取它们，但插件**不生成**（不在 `MANAGED_FIELDS` 里），源码里也没有对应的回写函数。这两个值的来源尚未核实。
-6. **多个 DSH 实例共享一个安装根**（`~/.dsh/dsh-feyagate`：`state.json` / `server.pid` / `versions/` / `cache/` 各一份）。本机实测有三个实例跑同一个 profile，2026-09-25 18:16–18:20 期间后台服务被 `Received signal 15` 杀了 8 次、每次退避重启 —— 每个实例启动时都看到"别人的子进程还没应答健康检查"，于是**杀掉它并自己拉一个**，形成互杀。已修：给"活着但尚未应答"的进程 **30 秒宽限**（`ADOPT_GRACE_MS`），期间轮询并优先**接管**（见 [ADR-0008](docs/adr/0008-shared-install-root.md) 与 `scripts/smoke-install.mjs` 第 8 节）。**仍未解决**：① 看门狗在"连续 3 次健康检查失败"（约 45s）后仍会对**接管来的**子进程发 SIGTERM —— 子进程真的卡死时多个实例仍可能各杀一次；② 多个实例会互相覆盖 `state.json` 里的 `effectivePort`；③ 建议日常只保留**一个** DSH 实例使用本插件。
+6. **多个 DSH 实例共享一个安装根**（`~/.dsh/dsh-feyagate`：`state.json` / `server.pid` / `versions/` / `cache/` 各一份）。本机实测有三个实例跑同一个 profile，2026-09-25 18:16–18:20 期间后台服务被 `Received signal 15` 杀了 8 次、每次退避重启 —— 每个实例启动时都看到"别人的子进程还没应答健康检查"，于是**杀掉它并自己拉一个**，形成互杀。已修两处（见 [ADR-0008](docs/adr/0008-shared-install-root.md)）：① 给"活着但尚未应答"的进程 **30 秒宽限**（`ADOPT_GRACE_MS`），期间轮询并优先**接管**（`scripts/smoke-install.mjs` 第 8 节）；② **属主模型**：pid 文件记录 `ownerPid`，看门狗只重启**属于自己**（或属主已退出）的进程；别人的子进程卡死时只如实报告"属于另一个仍在运行的 DSH 实例"，不再杀它（`scripts/check-supervise-ownership.mjs` 10 项）。门面的代理目标也改为优先用它自己 supervisor 的端口，不再依赖机器级共享的 `state.json.effectivePort`。**仍未解决**：在任一实例点「停止服务」仍会停掉共享的那一个（这是显式操作）；建议日常只保留**一个** DSH 实例使用本插件。
 
 ---
 

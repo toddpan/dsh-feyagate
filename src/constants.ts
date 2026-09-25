@@ -67,6 +67,14 @@ export const ADOPT_GRACE_MS = 30_000
 /** Poll interval used while waiting out `ADOPT_GRACE_MS`. */
 export const ADOPT_POLL_MS = 500
 
+/**
+ * Hung-child watchdog: probe every `WATCHDOG_INTERVAL_MS`, and after
+ * `WATCHDOG_FAILURES` consecutive misses replace the process — unless another
+ * live DSH instance owns it (see `PidRecord.ownerPid` in `supervise/process.ts`).
+ */
+export const WATCHDOG_INTERVAL_MS = 15_000
+export const WATCHDOG_FAILURES = 3
+
 /** Download knobs. */
 export const DOWNLOAD_TIMEOUT_MS = 120_000
 export const DOWNLOAD_MAX_REDIRECTS = 5

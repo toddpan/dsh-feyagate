@@ -85,5 +85,5 @@ curl -s -X POST http://127.0.0.1:38081/mcp -H 'Content-Type: application/json' \
 - **未在真实 DSH 宿主里复验过"修复后新会话能调用工具"**：门面的行为已用真实 SDK 客户端在真实子进程上验证（§4），但"桥注册 + 模型调用成功"这一步需要重启 DSH 后在会话里确认（宿主半侧代码在启动时加载）。
 - 本修复**不改上游**：上游若继续返回 `{}`，门面每次都补 —— 代价可忽略（仅在 `tools/list` 上，且只改需要改的工具）。
 - 排查过程中发现的两个**独立**问题（都已记录、按风险分级处理）：
-  1. 多个 DSH 实例共享一个安装根 → 互杀循环。已给接管加 30 秒宽限，见 [ADR-0008](../docs/adr/0008-shared-install-root.md)。
+  1. 多个 DSH 实例共享一个安装根 → 互杀循环。已修两处：接管加 30 秒宽限（`ADOPT_GRACE_MS`），并给 pid 文件加 `ownerPid` —— 看门狗只重启属于自己（或属主已退出）的进程，别人的子进程卡死时只如实报告。见 [ADR-0008](../docs/adr/0008-shared-install-root.md)、`scripts/smoke-install.mjs` 第 8 节、`scripts/check-supervise-ownership.mjs`（10 项）。
   2. 上游 v1.2.20 的 mac-arm64 包**自身缺 4 个 dylib**（与本次无关，是打包缺陷）；v1.2.19 正常。

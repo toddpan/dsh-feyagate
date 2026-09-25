@@ -1,7 +1,7 @@
 /**
  * Feyagate 网关 — 设置界面的浏览器半侧。
  *
- * 一个 `settings.section` 页面，五个 tab：服务 / 授权 / 账号总览 / 设置 / 日志。
+ * 一个 `settings.section` 页面，六个 tab：服务 / 授权 / 账号总览 / 平台登录 / 设置 / 日志。
  *
  * 三条约束决定了这里怎么写：
  *
@@ -22,6 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
   ApiEnvelope,
+  AuthCapabilities,
   CatalogEntry,
   GatewayInfo,
   JobSnapshot,
@@ -30,6 +31,8 @@ import type {
   PlatformAccount,
   PluginSettings,
   RuntimeStatus,
+  TuyaQrStatus,
+  TuyaQrTicket,
 } from './contract.js'
 
 // ────────────────────────────────────────────────────────────────── 常量
@@ -52,6 +55,7 @@ const TABS = [
   { id: 'service', label: '服务' },
   { id: 'license', label: '授权' },
   { id: 'accounts', label: '账号总览' },
+  { id: 'login', label: '平台登录' },
   { id: 'settings', label: '设置' },
   { id: 'logs', label: '日志' },
 ] as const
@@ -91,6 +95,10 @@ const CSS = `
 .fg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .fg-code { display: block; background: var(--dsw-alias-markdown-code-block); border-radius: 6px; padding: 8px 10px;
   overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.fg-qr { display: block; width: 200px; height: 200px; margin: 8px 0; padding: 6px; border-radius: 9px;
+  background: #fff; border: 1px solid var(--dsw-alias-border-l3); }
+.fg-link { color: var(--dsw-alias-brand-primary); text-decoration: underline; cursor: pointer; }
+.fg-form-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
 .fg-tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
   border: 1px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-secondary); }
 .fg-tag-ok { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
@@ -814,7 +822,7 @@ function AccountsPanel(props: { status: RuntimeStatus }): React.ReactElement {
     <div className="fg-root">
       <Card title="平台账号">
         <div className="fg-hint">
-          这一栏是<strong>登录</strong>状态，只读。账号密码、验证码与扫码都在聊天里由模型调用工具完成（插件刻意不代填账号口令，避免把凭据收集到设置界面）。
+          这一栏是<strong>登录</strong>状态。登录动作在「<strong>平台登录</strong>」标签里完成（也可以继续在聊天里让模型调用工具）。
         </div>
         {data === null || data.reachable === false ? (
           <div className="fg-empty">后台服务未运行，无法读取平台登录状态。</div>
@@ -822,19 +830,12 @@ function AccountsPanel(props: { status: RuntimeStatus }): React.ReactElement {
           <div className="fg-empty">服务端未返回平台列表。</div>
         ) : (
           data.platforms.map((entry) => {
-            const remaining = entry.authStatus['token_remaining_seconds']
-            const cloud = entry.authStatus['cloud_server']
-            const sub = [
-              typeof cloud === 'string' ? `区域 ${cloud}` : null,
-              typeof remaining === 'number' ? `登录有效期剩 ${formatDuration(remaining * 1000)}` : null,
-            ]
-              .filter((part): part is string => part !== null)
-              .join(' · ')
+            const sub = accountSummary(entry)
             return (
               <Row
                 key={entry.platformId}
                 main={entry.platformName}
-                sub={sub === '' ? undefined : sub}
+                sub={sub}
                 right={
                   <span className={`fg-tag ${entry.authenticated ? 'fg-tag-ok' : ''}`}>
                     {entry.authenticated ? '账号已登录' : '账号未登录'}
@@ -866,6 +867,631 @@ function AccountsPanel(props: { status: RuntimeStatus }): React.ReactElement {
           ))
         )}
       </Card>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────── 平台登录面板
+//
+// 登录动作从聊天搬到这里，但**能力仍在后台服务这一侧**：`GET /auth/capabilities`
+// 返回子进程真正注册了哪些授权工具，本机上游构建缺少的平台就如实显示"本构建不支持"，
+// 而不是给一个必然失败的按钮（实测 macOS 版 v1.2.19 完全没有华为工具与路由）。
+//
+// 凭据只经过本机回环交给子进程：插件不落盘、不写日志，也不回显；账号/密码一律
+// `type="password"`，且只在本组件状态里存活，切走即丢。
+
+/** `区域 cn · 登录有效期剩 2 天` —— 与「账号总览」用同一套词。 */
+function accountSummary(account: PlatformAccount): string | undefined {
+  const remaining = account.authStatus['token_remaining_seconds']
+  const region = account.authStatus['cloud_server'] ?? account.authStatus['region']
+  const parts = [
+    typeof region === 'string' && region !== '' ? `区域 ${region}` : null,
+    typeof remaining === 'number' ? `登录有效期剩 ${formatDuration(remaining * 1000)}` : null,
+  ].filter((part): part is string => part !== null)
+  return parts.length === 0 ? undefined : parts.join(' · ')
+}
+
+function Field(props: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  type?: string
+  placeholder?: string
+  hint?: string
+}): React.ReactElement {
+  return (
+    <div className="fg-field">
+      <label>{props.label}</label>
+      <input
+        className="fg-input"
+        type={props.type ?? 'text'}
+        value={props.value}
+        placeholder={props.placeholder ?? ''}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      {props.hint === undefined ? null : <div className="fg-hint">{props.hint}</div>}
+    </div>
+  )
+}
+
+function Select(props: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  options: Array<{ value: string; label: string }>
+}): React.ReactElement {
+  return (
+    <div className="fg-field">
+      <label>{props.label}</label>
+      <select className="fg-input" value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        {props.options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+/** One platform's card: name, live status, and either the flow or the reason. */
+function PlatformCard(props: {
+  name: string
+  account: PlatformAccount | undefined
+  unavailable?: string | null
+  children?: React.ReactNode
+}): React.ReactElement {
+  const account = props.account
+  const summary = account === undefined ? undefined : accountSummary(account)
+  return (
+    <Card
+      title={
+        <span className="fg-row">
+          <span>{props.name}</span>
+          <span className={`fg-tag ${account?.authenticated === true ? 'fg-tag-ok' : ''}`}>
+            {account === undefined ? '状态未知' : account.authenticated ? '已登录' : '未登录'}
+          </span>
+        </span>
+      }
+    >
+      {summary === undefined ? null : <div className="fg-hint">{summary}</div>}
+      {props.unavailable == null || props.unavailable === '' ? (
+        props.children
+      ) : (
+        <div className="fg-hint">
+          <span className="fg-tag fg-tag-warn">本构建不支持</span> {props.unavailable}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/** 退出登录：调一次宿主接口，然后让状态重新拉取。 */
+function LogoutButton(props: {
+  platformId: string
+  onDone: () => void
+  available: boolean
+  reason?: string
+}): React.ReactElement {
+  const action = useAction(props.onDone)
+  if (!props.available) {
+    return <div className="fg-hint">退出登录：{props.reason ?? '当前上游构建没有该平台的退出接口'}</div>
+  }
+  return (
+    <div>
+      <div className="fg-actions">
+        <Btn
+          variant="danger"
+          disabled={action.busy !== null}
+          onClick={() => action.run('logout', () => post('/auth/logout', { platform: props.platformId }))}
+        >
+          {action.busy === null ? '退出登录' : '正在退出…'}
+        </Btn>
+      </div>
+      {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
+    </div>
+  )
+}
+
+function XiaomiLogin(props: {
+  tools: Set<string>
+  account: PlatformAccount | undefined
+  reload: () => void
+}): React.ReactElement {
+  const hasUrl = props.tools.has('xiaomi/auth_url') && props.tools.has('xiaomi/auth_callback')
+  const [region, setRegion] = useState('cn')
+  const [url, setUrl] = useState<string | null>(null)
+  // 发起授权时的区域要沿用给回调：上游 callback 的 region 会覆盖当前区域，
+  // 两步之间用户改了下拉框就会导致"看不到设备"（桌面端也用 regionRef 这么做）。
+  const [urlRegion, setUrlRegion] = useState('cn')
+  const [pasted, setPasted] = useState('')
+  const [done, setDone] = useState<string | null>(null)
+  const action = useAction(props.reload)
+
+  return (
+    <PlatformCard
+      name="米家（小米）"
+      account={props.account}
+      unavailable={hasUrl ? null : '当前上游构建没有米家授权工具（xiaomi/auth_url、xiaomi/auth_callback）。'}
+    >
+      <div className="fg-hint">
+        两步：先拿授权地址，在浏览器里登录；登录后浏览器会跳到 <code className="fg-code">https://127.0.0.1/?code=…</code>，
+        <strong>页面打不开是正常的</strong> —— code 只在地址栏里。把地址栏整段粘回来即可。
+      </div>
+      <div className="fg-form-2">
+        <Select
+          label="账号区域"
+          value={region}
+          onChange={setRegion}
+          options={[
+            { value: 'cn', label: 'cn 中国大陆' },
+            { value: 'de', label: 'de 欧洲（德国）' },
+            { value: 'i2', label: 'i2 印度' },
+            { value: 'ru', label: 'ru 俄罗斯' },
+            { value: 'sg', label: 'sg 新加坡' },
+            { value: 'us', label: 'us 美国' },
+          ]}
+        />
+      </div>
+      <div className="fg-hint">选错区域会看不到设备；应选账号实际使用的区域。</div>
+      <div className="fg-actions">
+        <Btn
+          variant="primary"
+          disabled={action.busy !== null}
+          onClick={() =>
+            action.run('xiaomi-url', async () => {
+              const result = await post<{ url: string }>('/auth/xiaomi/url', { region })
+              setUrl(result.url)
+              setUrlRegion(region)
+              setDone(null)
+            })
+          }
+        >
+          {action.busy === null ? '获取授权地址' : '正在获取…'}
+        </Btn>
+      </div>
+      {url === null ? null : (
+        <div>
+          <div className="fg-actions">
+            <a className="fg-link" href={url} target="_blank" rel="noreferrer">
+              在浏览器里打开授权页
+            </a>
+            <Copy value={url} label="复制地址" />
+          </div>
+          <Field
+            label="粘贴回调地址（或只粘 code）"
+            value={pasted}
+            onChange={setPasted}
+            placeholder="https://127.0.0.1/?code=…"
+          />
+          <div className="fg-actions">
+            <Btn
+              variant="primary"
+              disabled={action.busy !== null || pasted.trim() === ''}
+              onClick={() =>
+                action.run('xiaomi-callback', async () => {
+                  const result = await post<{ region: string | null }>('/auth/xiaomi/callback', { input: pasted, region: urlRegion })
+                  setDone(result.region === null ? '授权成功' : `授权成功（区域 ${result.region}）`)
+                  setUrl(null)
+                  setPasted('')
+                })
+              }
+            >
+              {action.busy === null ? '完成授权' : '正在交换令牌…'}
+            </Btn>
+          </div>
+        </div>
+      )}
+      {done === null ? null : (
+        <div className="fg-hint">
+          <span className="fg-tag fg-tag-ok">成功</span> {done}
+        </div>
+      )}
+      {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
+      <div className="fg-hint">
+        退出登录：上游没有暴露米家退出接口（provider 里有 <code className="fg-code">logout()</code>，但既没有 MCP 工具也没有 REST 路由），
+        所以这里不提供 —— 需要退出只能等上游补上。
+      </div>
+    </PlatformCard>
+  )
+}
+
+function TuyaLogin(props: {
+  tools: Set<string>
+  account: PlatformAccount | undefined
+  reload: () => void
+}): React.ReactElement {
+  const hasQr = props.tools.has('auth/tuya_qr') && props.tools.has('auth/tuya_qr_status')
+  const { reload } = props
+  const [userCode, setUserCode] = useState('')
+  const [ticket, setTicket] = useState<TuyaQrTicket | null>(null)
+  const [generatedAt, setGeneratedAt] = useState(0)
+  const [scan, setScan] = useState<'idle' | 'waiting' | 'authorized' | 'error'>('idle')
+  const [detail, setDetail] = useState<string | null>(null)
+  const action = useAction(props.reload)
+
+  // 扫码等待放在服务端（单次最多 35 秒），这里只管循环再问一次：
+  // 用户扫得快就即时返回，扫得慢也不会把页面变成一堆失败请求。
+  useEffect(() => {
+    if (ticket === null || scan !== 'waiting') return
+    let cancelled = false
+    const loop = async (): Promise<void> => {
+      const expiresAt = generatedAt + Math.max(30, ticket.expireSeconds) * 1000
+      while (!cancelled) {
+        if (Date.now() > expiresAt) {
+          setScan('error')
+          setDetail('二维码已过期，请重新生成（涂鸦二维码有效期很短）')
+          return
+        }
+        try {
+          const status = await post<TuyaQrStatus>('/auth/tuya/status', { token: ticket.token, userCode })
+          if (cancelled) return
+          if (status.status === 'authorized') {
+            setScan('authorized')
+            setDetail(status.uid === null ? '涂鸦账号已登录' : `涂鸦账号已登录（uid ${status.uid}）`)
+            reload()
+            return
+          }
+          if (status.status === 'error') {
+            setScan('error')
+            setDetail(status.message ?? '二维码已失效，请重新生成')
+            return
+          }
+        } catch (cause) {
+          if (!cancelled) {
+            setScan('error')
+            setDetail((cause as Error).message)
+          }
+          return
+        }
+      }
+    }
+    void loop()
+    return () => {
+      cancelled = true
+    }
+  }, [ticket, scan, userCode, generatedAt, reload])
+
+  const qrSrc = ticket === null ? null : ticket.imageUrl.startsWith(API_PREFIX) ? ticket.imageUrl : `${API_PREFIX}${ticket.imageUrl}`
+
+  return (
+    <PlatformCard
+      name="涂鸦（Tuya）"
+      account={props.account}
+      unavailable={hasQr ? null : '当前上游构建没有涂鸦二维码工具（auth/tuya_qr）。'}
+    >
+      <div className="fg-hint">
+        用户代码在涂鸦 App 里：<strong>我的 → 设置 → 账号与安全 → 用户代码</strong>。填好后生成二维码，用涂鸦 App 右上角
+        「+ → 扫一扫」扫它，再在 App 里点「确认登录」。
+      </div>
+      <Field label="用户代码" value={userCode} onChange={setUserCode} placeholder="AY1790336520…" />
+      <div className="fg-actions">
+        <Btn
+          variant="primary"
+          disabled={action.busy !== null || userCode.trim() === ''}
+          onClick={() =>
+            action.run('tuya-qr', async () => {
+              const result = await post<TuyaQrTicket>('/auth/tuya/qr', { userCode })
+              setTicket(result)
+              setGeneratedAt(Date.now())
+              setScan('waiting')
+              setDetail(null)
+            })
+          }
+        >
+          {action.busy === null ? (ticket === null ? '生成二维码' : '重新生成') : '正在生成…'}
+        </Btn>
+      </div>
+      {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
+      {ticket === null || qrSrc === null ? null : (
+        <div>
+          <img className="fg-qr" src={qrSrc} alt="涂鸦授权二维码" />
+          <div className="fg-hint">
+            二维码 {ticket.expireSeconds} 秒内有效。
+            {scan === 'waiting' ? '正在等你扫码（会一直等到扫到为止，页面不用管）。' : null}
+            {scan === 'authorized' ? ' 已扫码确认。' : null}
+            <a className="fg-link" href={`${API_PREFIX}${ticket.textUrl}`} target="_blank" rel="noreferrer">
+              图片显示不出来？用文本二维码
+            </a>
+          </div>
+        </div>
+      )}
+      {detail === null ? null : (
+        <div className="fg-hint">
+          <span className={`fg-tag ${scan === 'authorized' ? 'fg-tag-ok' : 'fg-tag-bad'}`}>{scan === 'authorized' ? '成功' : '失败'}</span> {detail}
+        </div>
+      )}
+      <LogoutButton
+        platformId="tuya"
+        onDone={props.reload}
+        available={props.tools.has('auth/tuya_logout')}
+        reason="当前上游构建没有涂鸦退出工具（auth/tuya_logout）"
+      />
+    </PlatformCard>
+  )
+}
+
+function MideaLogin(props: {
+  tools: Set<string>
+  account: PlatformAccount | undefined
+  reload: () => void
+}): React.ReactElement {
+  const hasLogin = props.tools.has('auth/midea_login')
+  const [account, setAccount] = useState('')
+  const [password, setPassword] = useState('')
+  const [cloud, setCloud] = useState('meiju')
+  const [done, setDone] = useState<string | null>(null)
+  const action = useAction(props.reload)
+
+  return (
+    <PlatformCard
+      name="美的（Midea）"
+      account={props.account}
+      unavailable={hasLogin ? null : '当前上游构建没有美的登录工具（auth/midea_login）。'}
+    >
+      <div className="fg-hint">账号密码直接交给本机后台服务（127.0.0.1），插件不保存、不写日志。</div>
+      <div className="fg-form-2">
+        <Field label="美的账号" value={account} onChange={setAccount} placeholder="手机号 / 邮箱" />
+        <Field label="密码" value={password} onChange={setPassword} type="password" />
+        <Select
+          label="客户端类型"
+          value={cloud}
+          onChange={setCloud}
+          options={[
+            { value: 'meiju', label: '美居（meiju）' },
+            { value: 'msmart', label: 'MSmartHome（msmart）' },
+          ]}
+        />
+      </div>
+      <div className="fg-actions">
+        <Btn
+          variant="primary"
+          disabled={action.busy !== null || account.trim() === '' || password === ''}
+          onClick={() =>
+            action.run('midea-login', async () => {
+              const result = await post<{ deviceCount: number; cloud: string }>('/auth/midea/login', {
+                account,
+                password,
+                cloud,
+              })
+              setDone(`登录成功，已同步 ${result.deviceCount} 个设备（${result.cloud}）`)
+              setPassword('')
+            })
+          }
+        >
+          {action.busy === null ? '登录' : '正在登录…'}
+        </Btn>
+      </div>
+      {done === null ? null : (
+        <div className="fg-hint">
+          <span className="fg-tag fg-tag-ok">成功</span> {done}
+        </div>
+      )}
+      {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
+      <LogoutButton
+        platformId="midea"
+        onDone={props.reload}
+        available={props.tools.has('auth/midea_logout')}
+        reason="当前上游构建没有美的退出工具（auth/midea_logout）"
+      />
+    </PlatformCard>
+  )
+}
+
+function EwelinkLogin(props: {
+  tools: Set<string>
+  account: PlatformAccount | undefined
+  reload: () => void
+}): React.ReactElement {
+  const hasLogin = props.tools.has('auth/ewelink_login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [countryCode, setCountryCode] = useState('+86')
+  const [done, setDone] = useState<string | null>(null)
+  const action = useAction(props.reload)
+
+  return (
+    <PlatformCard
+      name="易微联（eWeLink）"
+      account={props.account}
+      unavailable={hasLogin ? null : '当前上游构建没有易微联登录工具（auth/ewelink_login）。'}
+    >
+      <div className="fg-hint">账号密码直接交给本机后台服务（127.0.0.1），插件不保存、不写日志。</div>
+      <div className="fg-form-2">
+        <Field label="邮箱或手机号" value={email} onChange={setEmail} />
+        <Field label="密码" value={password} onChange={setPassword} type="password" />
+        <Field
+          label="国家代码"
+          value={countryCode}
+          onChange={setCountryCode}
+          placeholder="+86"
+          hint="账号注册地；填错会登录失败或看不到设备。"
+        />
+      </div>
+      <div className="fg-actions">
+        <Btn
+          variant="primary"
+          disabled={action.busy !== null || email.trim() === '' || password === ''}
+          onClick={() =>
+            action.run('ewelink-login', async () => {
+              const result = await post<{ deviceCount: number }>('/auth/ewelink/login', { email, password, countryCode })
+              setDone(`登录成功，已同步 ${result.deviceCount} 个设备`)
+              setPassword('')
+            })
+          }
+        >
+          {action.busy === null ? '登录' : '正在登录…'}
+        </Btn>
+      </div>
+      {done === null ? null : (
+        <div className="fg-hint">
+          <span className="fg-tag fg-tag-ok">成功</span> {done}
+        </div>
+      )}
+      {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
+      <LogoutButton
+        platformId="ewelink"
+        onDone={props.reload}
+        available={props.tools.has('auth/ewelink_logout')}
+        reason="当前上游构建没有易微联退出工具（auth/ewelink_logout）"
+      />
+    </PlatformCard>
+  )
+}
+
+function HuaweiLogin(props: {
+  account: PlatformAccount | undefined
+  tools: Set<string>
+  reload: () => void
+}): React.ReactElement {
+  const [account, setAccount] = useState('')
+  const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [needCode, setNeedCode] = useState(false)
+  const [challengeName, setChallengeName] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const action = useAction(props.reload)
+
+  const applyOutcome = (outcome: { authenticated: boolean; needCode: boolean; challengeName: string | null; retryWithoutCode: boolean }): void => {
+    setNeedCode(outcome.needCode)
+    setChallengeName(outcome.challengeName)
+    if (outcome.retryWithoutCode) {
+      // 关键分流：验证码已经通过、只是换令牌失败，会话已保留。
+      // 这时再要一个验证码不但无用，还会白费用户一个码。
+      setNotice('验证码已通过、会话已保留：无需重新输入，可直接继续（若状态仍是未登录，稍后会自动补齐令牌）。')
+      props.reload()
+      return
+    }
+    if (outcome.authenticated) {
+      setDone('华为账号已登录')
+      setPassword('')
+      setCode('')
+      props.reload()
+    }
+  }
+
+  return (
+    <PlatformCard
+      name="华为智慧生活"
+      account={props.account}
+      unavailable={
+        props.tools.has('auth/huawei_login')
+          ? null
+          : '本机后台服务（v1.2.19）没有华为登录工具 —— 上游在 v1.2.20 才加上 auth/huawei_login / auth/huawei_challenge / auth/huawei_logout。升级后台服务后这张卡片会自动出现，无需升级插件。'
+      }
+    >
+      <div className="fg-hint">
+        两步验证：先提交账号密码，再提交验证码。<strong>华为不发短信</strong> —— 验证码显示在已登录的华为手机/平板弹窗里，
+        或「设置 → 华为帐号 → 帐号安全」。
+      </div>
+      <div className="fg-form-2">
+        <Field label="华为账号（手机号或邮箱）" value={account} onChange={setAccount} />
+        <Field label="账号密码" value={password} onChange={setPassword} type="password" />
+      </div>
+      {needCode ? (
+        <div>
+          <Field
+            label="双重验证码"
+            value={code}
+            onChange={setCode}
+            hint={challengeName === null ? undefined : `上游提示验证码发往：${challengeName}`}
+          />
+          <div className="fg-actions">
+            <Btn
+              variant="primary"
+              disabled={action.busy !== null || code.trim() === ''}
+              onClick={() =>
+                action.run('huawei-challenge', async () => {
+                  setNotice(null)
+                  applyOutcome(await post('/auth/huawei/challenge', { code }))
+                })
+              }
+            >
+              {action.busy === null ? '提交验证码' : '正在验证…'}
+            </Btn>
+          </div>
+        </div>
+      ) : (
+        <div className="fg-actions">
+          <Btn
+            variant="primary"
+            disabled={action.busy !== null || account.trim() === '' || password === ''}
+            onClick={() =>
+              action.run('huawei-login', async () => {
+                setNotice(null)
+                applyOutcome(await post('/auth/huawei/login', { account, password }))
+              })
+            }
+          >
+            {action.busy === null ? '登录' : '正在登录…'}
+          </Btn>
+        </div>
+      )}
+      {notice === null ? null : (
+        <div className="fg-hint">
+          <span className="fg-tag fg-tag-warn">注意</span> {notice}
+        </div>
+      )}
+      {done === null ? null : (
+        <div className="fg-hint">
+          <span className="fg-tag fg-tag-ok">成功</span> {done}
+        </div>
+      )}
+      {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
+      <LogoutButton
+        platformId="huawei"
+        onDone={props.reload}
+        available={props.tools.has('auth/huawei_logout')}
+        reason="本机上游构建没有华为退出工具（需 v1.2.20 及以上）"
+      />
+    </PlatformCard>
+  )
+}
+
+function LoginPanel(props: { status: RuntimeStatus; reload: () => void }): React.ReactElement {
+  const capabilities = usePoll<AuthCapabilities>('/auth/capabilities', 20_000)
+  const overview = usePoll<{ platforms: PlatformAccount[]; reachable: boolean }>('/account/overview', 10_000)
+  const caps = capabilities.data
+  const tools = useMemo(() => new Set(caps?.tools ?? []), [caps])
+  const accounts = overview.data?.platforms ?? []
+  const accountOf = (id: string): PlatformAccount | undefined => accounts.find((entry) => entry.platformId === id)
+  const reload = props.reload
+
+  if (caps === null) {
+    // 能力还在路上：先别渲染各平台卡片，否则会闪一下"本构建不支持"。
+    return (
+      <div className="fg-root">
+        <Card title="平台登录">
+          <div className="fg-empty">正在读取后台服务的授权能力…</div>
+        </Card>
+      </div>
+    )
+  }
+
+  if (caps.childReachable === false) {
+    return (
+      <div className="fg-root">
+        <Card title="平台登录">
+          <div className="fg-empty">后台服务未运行：请先在「服务」标签里安装并启动，再回到这里登录。</div>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fg-root">
+      <Card title="从这里登录">
+        <div className="fg-hint">
+          账号密码 / 验证码只在本机回环内交给后台服务进程，<strong>插件不保存、不写日志、不回显</strong>；退出登录会清掉后台服务里的令牌。
+          「账号总览」标签只显示状态，登录动作都在这里完成。
+        </div>
+      </Card>
+      <XiaomiLogin tools={tools} account={accountOf('xiaomi')} reload={reload} />
+      <TuyaLogin tools={tools} account={accountOf('tuya')} reload={reload} />
+      <MideaLogin tools={tools} account={accountOf('midea')} reload={reload} />
+      <EwelinkLogin tools={tools} account={accountOf('ewelink')} reload={reload} />
+      <HuaweiLogin account={accountOf('huawei')} tools={tools} reload={reload} />
     </div>
   )
 }
@@ -1192,6 +1818,7 @@ function FeyagateSettings(): React.ReactElement {
       {tab === 'service' ? <ServicePanel status={current} reload={reload} /> : null}
       {tab === 'license' ? <LicensePanel status={current} reload={reload} /> : null}
       {tab === 'accounts' ? <AccountsPanel status={current} /> : null}
+      {tab === 'login' ? <LoginPanel status={current} reload={reload} /> : null}
       {tab === 'settings' ? <SettingsPanel status={current} reload={reload} /> : null}
       {tab === 'logs' ? <LogsPanel /> : null}
     </div>

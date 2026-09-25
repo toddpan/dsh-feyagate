@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-feyagate-gateway",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "FeyaGate 网关 × DSH —— 在 DSH 里托管本机 miloco-mcp-server，并提供服务/授权/账号的可视化设置界面",
   "private": false,
   "repository": {
@@ -46,7 +46,7 @@
     "smoke:install": "node scripts/smoke-install.mjs",
     "test": "npm run build && npm run check && npm run check:runtime && npm run smoke:install",
     "check:download": "node scripts/selfcheck-download.mjs",
-    "check:runtime": "npm run check:download && node scripts/smoke.mjs --offline && node scripts/check-supervise-ownership.mjs && node scripts/check-tuya-qr.mjs"
+    "check:runtime": "npm run check:download && node scripts/smoke.mjs --offline && node scripts/check-supervise-ownership.mjs && node scripts/check-tuya-qr.mjs && node scripts/check-platform-auth.mjs"
   },
   "exports": {
     ".": {

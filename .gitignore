@@ -11,3 +11,6 @@ tmp/
 # 冒烟测试的临时安装根目录（会写入下载包、state.json 与日志）
 .smoke/
 .smoke-install/
+
+# 属主/看门狗测试的运行期夹具（每次跑都会改写 startedAt）
+.smoke-ownership/

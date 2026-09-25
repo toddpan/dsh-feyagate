@@ -11,6 +11,7 @@
 
 export type {
   ApiEnvelope,
+  AuthCapabilities,
   CameraSummary,
   GatewayInfo,
   JobKind,
@@ -23,6 +24,8 @@ export type {
   PluginSettings,
   RuntimeStatus,
   ServiceState,
+  TuyaQrStatus,
+  TuyaQrTicket,
 } from '../types.js'
 
 /** One entry of `GET /install/catalog`. */

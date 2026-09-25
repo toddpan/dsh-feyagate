@@ -291,6 +291,44 @@ export interface PlatformAccount {
   authStatus: Record<string, unknown>
 }
 
+/**
+ * What the running child can actually do about platform authorization.
+ *
+ * `tools` is the intersection of the child's advertised tool list and the auth
+ * tools this UI drives, so the browser half gates each platform on a positive
+ * answer. The installed macOS build (v1.2.19), for instance, has no 华为 tools —
+ * upstream added them in v1.2.20, and the card lights up on upgrade with no code
+ * change here.
+ */
+export interface AuthCapabilities {
+  childReachable: boolean
+  tools: string[]
+  /** Same list the 账号总览 tab shows: authentication, not entitlement. */
+  platforms: PlatformAccount[]
+}
+
+/** `POST /auth/tuya/qr` → everything the page needs to show a scannable code. */
+export interface TuyaQrTicket {
+  token: string
+  /** The scanner payload: `tuyaSmart--qrLogin/?token=…`. */
+  payloadUrl: string
+  /** This plugin's PNG route (root-relative, so any host works). */
+  imageUrl: string
+  /** Same code as block characters, for clients that cannot show images. */
+  textUrl: string
+  expireSeconds: number
+}
+
+/** `POST /auth/tuya/status` → the scan result, after the plugin waited for it. */
+export interface TuyaQrStatus {
+  status: 'pending' | 'authorized' | 'error'
+  uid: string | null
+  /** The plugin's own wait elapsed; the page should simply ask again. */
+  timedOut?: boolean
+  /** Child-authored detail, when it gave one. */
+  message?: string | null
+}
+
 /** A camera as reported by `xiaomi/camera_list`. */
 export interface CameraSummary {
   deviceId: string

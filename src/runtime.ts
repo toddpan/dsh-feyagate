@@ -21,6 +21,7 @@
  */
 
 import { ChildApi } from './child-api.js'
+import { PlatformAuth } from './platform-auth.js'
 import { LogBuffer } from './log.js'
 import { JobManager } from './jobs.js'
 import { InstallService } from './install.js'
@@ -52,6 +53,8 @@ export class GatewayRuntime {
   readonly supervisor: Supervisor | null
   readonly facade: McpFacade | null
   readonly childApi: ChildApi | null
+  /** Platform authorization for the settings page (see `platform-auth.ts`). */
+  readonly platformAuth: PlatformAuth | null
   readonly installs: InstallService | null
 
   private readonly version: string
@@ -74,6 +77,7 @@ export class GatewayRuntime {
       this.supervisor = null
       this.facade = null
       this.childApi = null
+      this.platformAuth = null
       this.installs = null
       this.log.error(`当前平台不受支持（${process.platform}/${process.arch}），无法管理后台服务`)
       return
@@ -110,6 +114,7 @@ export class GatewayRuntime {
       log: this.log,
       port: () => this.state.get().server.effectivePort,
     })
+    this.platformAuth = new PlatformAuth({ log: this.log, child: this.childApi })
     this.installs = new InstallService({
       root: this.state.root,
       platform,

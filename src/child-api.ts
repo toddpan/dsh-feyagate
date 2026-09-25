@@ -239,6 +239,33 @@ export class ChildApi {
   }
 
   /**
+   * The tool names the child advertises, or null when it is unreachable.
+   *
+   * Used for capability negotiation before showing a platform's login form: a
+   * build without (say) Huawei must be able to say so instead of offering a
+   * button that always fails.
+   */
+  async toolNames(timeoutMs = REST_TIMEOUT_MS): Promise<string[] | null> {
+    const base = this.base()
+    if (base === null) return null
+    try {
+      const response = await fetch(`${base}/mcp/http`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      const payload = (await response.json()) as { result?: { tools?: Array<{ name?: string }> } }
+      const tools = payload.result?.tools
+      if (!Array.isArray(tools)) return null
+      return tools.map((tool) => tool?.name).filter((name): name is string => typeof name === 'string')
+    } catch (error) {
+      this.log.warn(`读取后台服务工具列表失败：${(error as Error).message}`)
+      return null
+    }
+  }
+
+  /**
    * Platform *authentication* list.
    *
    * Returns an empty array — not an error — when the child is down or the tool

@@ -33,6 +33,7 @@ import { readSettings, validateSettings, writeSettings, type SettingsPatch } fro
 import { loadManifest, latestVersionForPlatform, listVersionsForPlatform, compatSummary } from './manifest.js'
 import { LAUNCHER } from './launcher.js'
 import { InvalidTuyaTokenError, renderTuyaQrPng, renderTuyaQrText } from './qr-image.js'
+import { PlatformAuthError } from './platform-auth.js'
 import { cacheDir } from './paths.js'
 import type { ApiEnvelope } from './types.js'
 
@@ -115,6 +116,27 @@ export interface ApiOptions {
 export function createApiHandler(options: ApiOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { runtime } = options
   const childApi = runtime.childApi
+  const auth = runtime.platformAuth
+
+  /**
+   * Run an authorization operation, mapping its own failure type onto HTTP.
+   *
+   * `PlatformAuthError` already carries the status the browser should see (400
+   * for input/upstream rejections, 501 when the running child has no such
+   * interface, 503 when it is not running), so the mapping lives there rather
+   * than in a switch full of guesses.
+   */
+  const runAuth = async (res: ServerResponse, operation: () => Promise<unknown>): Promise<void> => {
+    try {
+      ok(res, await operation())
+    } catch (error) {
+      if (error instanceof PlatformAuthError) {
+        fail(res, error.status, error.message)
+        return
+      }
+      throw error
+    }
+  }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
@@ -411,6 +433,114 @@ export function createApiHandler(options: ApiOptions): (req: IncomingMessage, re
           return
 
         // ── account / license ──────────────────────────────────────────
+        // ── platform authorization (the settings page drives these) ────
+        // The browser half renders one card per platform and gates its actions
+        // on `capabilities`, because the installed child may not implement a
+        // platform at all (the macOS build has no 华为 tools or routes).
+        case 'GET /auth/capabilities': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          ok(res, await auth.capabilities())
+          return
+        }
+
+        case 'POST /auth/tuya/qr': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.tuyaQr(body.userCode))
+          return
+        }
+
+        case 'POST /auth/tuya/status': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.waitForTuyaStatus(body.token, body.userCode))
+          return
+        }
+
+        case 'POST /auth/midea/login': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.loginMidea(body.account, body.password, body.cloud))
+          return
+        }
+
+        case 'POST /auth/ewelink/login': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.loginEwelink(body.email, body.password, body.countryCode))
+          return
+        }
+
+        case 'POST /auth/xiaomi/url': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.xiaomiAuthUrl(body.region))
+          return
+        }
+
+        case 'POST /auth/xiaomi/callback': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.xiaomiAuthCallback(body.input, body.region))
+          return
+        }
+
+        case 'POST /auth/huawei/login': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.loginHuawei(body.account, body.password))
+          return
+        }
+
+        case 'POST /auth/huawei/challenge': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          await runAuth(res, () => auth.huaweiChallenge(body.code))
+          return
+        }
+
+        case 'POST /auth/logout': {
+          if (auth === null) {
+            fail(res, 400, '当前平台不受支持')
+            return
+          }
+          const body = await readJsonBody(req)
+          const platformId = typeof body.platform === 'string' ? body.platform.trim() : ''
+          if (platformId === '') {
+            fail(res, 400, '缺少 platform 参数')
+            return
+          }
+          await runAuth(res, () => auth.logout(platformId))
+          return
+        }
+
         case 'GET /account/overview': {
           if (childApi === null) {
             fail(res, 400, '当前平台不受支持')

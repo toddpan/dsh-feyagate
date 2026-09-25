@@ -3,7 +3,7 @@
 > **这个文件解决什么问题**：让三类读者各自在 3 分钟内找到自己要看的东西 —— 想装的人拿到最短安装路径，想贡献的人拿到开发环境与目录职责，关心合规的人拿到"仓库里到底有什么、没有什么"。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.2.0`
+npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.3.0`
 
 ---
 
@@ -91,7 +91,11 @@ dsh plugin --profile <profile> add @dsh-external/dsh-feyagate-gateway
 
 ### 4. 登录平台账号
 
-MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对应工具完成（工具清单见 [FeyaGate_MCP_API.md](../feyagate-skill-gh/FeyaGate_MCP_API.md)），例如小米走浏览器完成 OAuth、涂鸦走二维码、美的/易微联走账号密码、华为走两步验证码。完整的图形化登录页在二期（见下方「功能清单」）。
+**在设置界面里点着登录**：`设置 › 插件 › 飞阳网关 › 平台登录`，米家 / 涂鸦 / 美的 / 易微联 / 华为五张卡片各自一个流程（涂鸦直接显示可扫的二维码，米家是「拿授权地址 → 粘回回调地址」两步）。**哪张卡片能用由后台服务自己报的能力决定**：本机 v1.2.19 没有华为工具，华为卡片就明确写「本构建不支持」而不是给一个必然失败的按钮；后台服务升到 v1.2.20 后这张卡片自己出现，插件不用跟着升级。
+
+凭据（账号、密码、验证码）只在**本机回环**内交给后台服务进程：插件不落盘、不写日志、不回显，写操作全部校验 Origin，密码输入框提交后即清空。详见 [ADR-0009](docs/adr/0009-platform-login-in-settings-page.md)。
+
+**对话里也能走**（工具清单见 [FeyaGate_MCP_API.md](../feyagate-skill-gh/FeyaGate_MCP_API.md)）——两者调的是同一批工具：小米走浏览器 OAuth、涂鸦走二维码、美的/易微联走账号密码、华为走两步验证码。
 
 **涂鸦（唯一一条完全在聊天里走完的授权链）** —— 你只需要做两件事：
 
@@ -123,6 +127,7 @@ MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对
 | 设置界面 · 服务 | 概览 / 安装与重装 / 升级与版本 / 端口与网络 / 日志与诊断 / 危险区 |
 | 设置界面 · 授权 | 许可证与试用期：版本、状态、到期、宽限、授权码写入、设备 ID、各平台试用剩余 |
 | 设置界面 · 账号总览 | **只读**：平台清单、登录状态、设备数、试用剩余（清单以服务端下发为准，本地不写死） |
+| 设置界面 · 平台登录 | 五个平台的图形化登录/退出：米家两步 OAuth（自动从回调地址里抠 `code`）、涂鸦二维码（服务端完成最长 35 秒的扫码等待）、美的/易微联账号口令、华为两步验证码（**按 `retry_without_code` 分流，不白费一个验证码**）；能力协商驱动，缺哪个平台就说清缺什么；授权过期时给出"去授权标签"而不是"密码错了" |
 | 升级与回滚 | 检查更新 → 升级到 `versions/<new>/` → 健康确认失败自动回滚 `lastKnownGood`；断电安全靠 `pending` 标记 |
 | 随插件分发的 Skill 文档 | `skills/feyagate-gateway/SKILL.md`，教模型怎么正确调用这 76 个工具 |
 | 插件自身升级 | **只做"检测到新版本 + 提示 + 给可复制的升级命令"**（见下） |
@@ -130,7 +135,7 @@ MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对
 ### 二期（明确**不是**"已支持"）
 
 - 常驻门面的工具集热更新（子进程就绪后发 `notifications/tools/list_changed`）之外的**多端点管理**：局域网 ESP32 网关、远端 miloco，条目分「本机托管」与「远端只连」。
-- 平台账号页完整版：米家 OAuth 跳浏览器 + 自动回调、涂鸦二维码 + 倒计时、美的/易微联表单、华为两步验证 + 会话保全、Home Assistant。
+- Home Assistant（上游 `miloco-mcp-server` 与桌面端都**没有** HA provider，只有 ESP32 固件有；要做只能直连 ESP32 的 `/api/v1/platform/ha/*` 或 HA 自己的 WebSocket）。
 - 设备页与摄像头页（连接 / 断开 / 抓拍 / 采集参数）、智能页（小智 AI / Vision AI / 触发规则 / 记忆 / 技能）。
 - 插件内一键升级（spawn `dsh plugin update` + 宿主重启）。
 - 诊断包导出、镜像源配置界面。
@@ -166,7 +171,8 @@ MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对
 | Tab | MVP 做到哪 | 解决什么问题 |
 |---|---|---|
 | **服务** | 概览 / 安装与重装 / 升级与版本 / 端口与网络 / 日志与诊断 / 危险区 | 「后台服务在不在、什么版本、坏在哪、怎么修」 |
-| **账号** | 只读总览（平台清单 + 登录状态 + 设备数 + 试用剩余） | 「一屏看清哪个平台是红的」；登录动作在对话里完成 |
+| **账号总览** | 只读总览（平台清单 + 登录状态 + 设备数 + 试用剩余） | 「一屏看清哪个平台是红的」 |
+| **平台登录** | 五个平台的登录/退出（能力协商驱动，缺什么说什么） | 「直接在界面里把账号登进去」，不必先学会跟模型描述工具调用 |
 | **设备** | ❌ 二期 | 「设备都被看见了吗、摄像头能看吗」 |
 | **智能** | ❌ 二期 | 小智 AI / Vision AI / 触发规则 / 记忆 / 技能 |
 | **授权** | 许可证与试用期（授权码写入、各平台状态、设备 ID） | 「免费能用什么、授权解锁什么、还剩几天」 |
@@ -187,7 +193,9 @@ MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对
 <!-- TODO(screenshot) 设置 › 飞阳网关 › 服务 › 端口与网络：端口校验错误（FG-PORT-001，带占用 PID） -->
 <!-- TODO(screenshot) 设置 › 飞阳网关 › 服务 › 日志与诊断：日志行 + 自检项 -->
 <!-- TODO(screenshot) 设置 › 飞阳网关 › 授权：免费版横幅 + 各平台授权状态表 -->
-<!-- TODO(screenshot) 设置 › 飞阳网关 › 账号：平台总览卡片（只读） -->
+<!-- TODO(screenshot) 设置 › 飞阳网关 › 账号总览：平台总览卡片（只读） -->
+<!-- TODO(screenshot) 设置 › 飞阳网关 › 平台登录：涂鸦二维码 + 扫码等待中 -->
+<!-- TODO(screenshot) 设置 › 飞阳网关 › 平台登录：华为卡片在 v1.2.19 上如实显示「本构建不支持」 -->
 <!-- TODO(screenshot) 设置 › 插件 › 插件配置 › 飞阳网关：插件参数卡 -->
 <!-- TODO(screenshot) 首次安装引导（settings.onboarding 步骤） -->
 
@@ -330,8 +338,8 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 - **全新克隆的入口只有一条命令**：`npm install && npm test`。`lib/` 是构建产物、不在仓库里，所以下面那些依赖 `lib/` 的检查必须先 `npm run build`；`npm test` 已经包含构建。
 - 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
 - **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
-- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）+ 属主/看门狗（`check-supervise-ownership.mjs`）+ 涂鸦二维码（`check-tuya-qr.mjs`）。
-- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **183 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 10 属主/看门狗 + 26 涂鸦二维码 + 99 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
+- **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）+ 属主/看门狗（`check-supervise-ownership.mjs`）+ 涂鸦二维码（`check-tuya-qr.mjs`）+ 平台授权（`check-platform-auth.mjs`）。
+- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **237 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 10 属主/看门狗 + 26 涂鸦二维码 + 54 平台授权 + 99 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
 - 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
 - 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
@@ -353,6 +361,7 @@ app/dsh-feyagate/
 ├── scripts/build.sh          tsc + tsdown 串起来，产出 lib/
 ├── scripts/verify-manifest.mjs CI 校验清单自洽
 ├── scripts/check-tuya-qr.mjs  涂鸦二维码：编码后用独立解码器读回
+├── scripts/check-platform-auth.mjs  平台授权：能力协商 / 凭据边界 / 门禁与分流
 ├── scripts/smoke.mjs         端到端冒烟：真下载 → 真校验 → 真解压 → 真启动
 ├── skills/feyagate-gateway/SKILL.md   随插件分发的模型技能文档
 ├── src/                      Host 半侧
@@ -388,6 +397,7 @@ app/dsh-feyagate/
     ├── design.md             工程内设计文档（双半侧边界、MCP 选型、状态机、字段归属）
     ├── user-guide.zh.md      面向最终用户的操作手册
     ├── verify-mcp-inputschema-fix.md
+    ├── verify-platform-login.md
     ├── verify-tuya-auth-flow.md
     │                         验证记录：AI 看不到工具的真实根因（上游 inputSchema 不合规）与修复
     └── adr/0001…0008         8 条架构决策记录（0008：多实例共享安装根时的接管策略）
@@ -403,12 +413,13 @@ app/dsh-feyagate/
 | `scripts/selfcheck-download.mjs` | 下载/校验/解压层的单元自检（用构造出来的归档，不联网）：校验失败必须删掉坏包且绝不落位、无校验值默认拒绝、顶层目录上移、找不到二进制时报错而不是静默成功 |
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
 | `scripts/check-tuya-qr.mjs` | 涂鸦授权：token→二维码（PNG 与文本兜底**都用独立解码器 `jsqr` 读回**，不只看「产生了图片」）、`chat_display` 文案、路由端到端、非法 token 400（26 项断言） |
+| `scripts/check-platform-auth.mjs` | 平台授权（插件 API 边界 + 假子进程）：能力协商（缺华为时卡片就该缺席）、涂鸦扫码**一次请求等到 `authorized`**（上游被问 ≥2 次）、用户代码错不伪造二维码、美的/易微联/华为的登录与失败文案、米家「粘整段回调地址 → 抠出 `code`」，**授权门禁 `capability_denied` → 403 并指向授权标签**、华为 `retry_without_code` **不当成失败**、退出登录 501 如实说上游没有、**密码不出现在插件日志/状态/任何响应里**、其他 Origin 的登录请求 403、服务未运行时 503（54 项断言） |
 | `scripts/check-supervise-ownership.mjs` | 属主与看门狗：pid 文件写明属主时**访客不得杀掉别人的子进程**（只如实报告），属主消失后才允许替换，无人拥有的会被接管并登记自己为属主（10 项断言，用快速看门狗参数，约 3 秒） |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
 | `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 接管未就绪进程 → 卸载保数据 → 启动即失败（90 项断言） |
 | `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
-| `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 |
-| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（183 项计数断言） |
+| `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 + 属主/看门狗 + 涂鸦二维码 + 平台授权 |
+| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（237 项计数断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |
 | `npm run build:client` | 只跑 tsdown，快速迭代浏览器半侧 |
 
@@ -417,6 +428,8 @@ app/dsh-feyagate/
 - [`docs/design.md`](docs/design.md)：双半侧职责边界、为什么桥指向门面、状态机、配置字段归属表。
 - [`docs/verify-mcp-inputschema-fix.md`](docs/verify-mcp-inputschema-fix.md)：**AI 看不到 `mcp__feyagate__*` 工具**的根因链与修复证据（含真机复验与复现命令）。
 - [`docs/verify-tuya-auth-flow.md`](docs/verify-tuya-auth-flow.md)：**涂鸦授权卡在「请扫码」却没有二维码**的根因、三层适配设计与验证证据（独立解码器回环 + 真机探针）。
+- [`docs/verify-platform-login.md`](docs/verify-platform-login.md)：设置界面里五个平台登录的**能力协商、凭据边界、门禁与 `retry_without_code` 分流**怎么验的（54 项断言 + 真机探针输出）。
+- [ADR-0009](docs/adr/0009-platform-login-in-settings-page.md)：**为什么把登录从"只在聊天里"搬进设置页**，以及为此承诺的凭据边界。
 - [`docs/adr/`](docs/adr)：7 条已定决策与它们的**替代方案被否的理由**。改架构前先看有没有撞上其中一条。
 - [`../../docs/DSH-插件机制研究报告.md`](../../docs/DSH-插件机制研究报告.md)：DSH 插件机制的实证结论（每条带文件:行号）。
 
@@ -429,7 +442,7 @@ app/dsh-feyagate/
 
 ## 实现状态（诚实声明）
 
-本 README 描述的是 **0.2.0 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
+本 README 描述的是 **0.3.0 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
 
 - ✅ 双半侧都已在源码里：Host（`index.ts`、`runtime.ts`、`install.ts`、`supervise/*`、`mcp/facade.ts`、`api.ts`、`config-gen.ts`、`download/*`、`child-api.ts`、`settings.ts`）与浏览器半侧（`client/index.tsx` + `client/contract.ts`）。
 - ✅ 工具链齐全：`scripts/{build.sh,gen-manifest.mjs,verify-manifest.mjs,check-patch.mjs,smoke.mjs,smoke-install.mjs}`，`lib/` 是构建产物（已 gitignore）。
@@ -437,7 +450,7 @@ app/dsh-feyagate/
 
 ### 已经实测过的部分
 
-`npm test` 全绿（24 + 19 + 10 + 26 + 99 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
+`npm test` 全绿（24 + 5 + 19 + 10 + 26 + 54 + 99 项断言，另有清单结构校验）。具体覆盖：
 
 | 验证对象 | 证据 |
 |---|---|
@@ -452,6 +465,7 @@ app/dsh-feyagate/
 | 启动 → 健康检查 → 门面转发真实工具列表 → REST `{code,data}` 解包 | `scripts/smoke-install.mjs` 第 1 节 |
 | 升级后回滚目标仍然可用、回滚后服务健康 | `scripts/smoke-install.mjs` 第 2–3 节 |
 | 子进程被 `SIGKILL` 后自动拉起（换 pid、重启计数 +1） | `scripts/smoke-install.mjs` 第 7 节 |
+| 设置界面里的五个平台登录：能力协商、凭据不落盘不进日志、授权门禁、华为免验证码分流 | `scripts/check-platform-auth.mjs` 54/54（真实 API handler + 假子进程，MCP 与"子进程连接被拒"两条路径都覆盖）；真机探针（v1.2.19 + 本机已登录米家）：能力协商只报 10 个授权工具、华为卡片自动缺席、米家授权地址真实生成、涂鸦假用户代码 400 原样透传、米家退出 501、**后台服务与用户米家登录均未被扰动** |
 | 上游只回 token 时，门面把它变成聊天里可扫的二维码（`chat_display`），并用工具描述告诉模型「贴图 + 自己轮询、别反问用户」 | `scripts/smoke-install.mjs`（假子进程 + 调用计数器）：描述注入、`chat_display` 指向插件路由、**对照直连子进程只有 bare token**、一次调用等到 `authorized`（子进程被问 ≥3 次）、上游字段只加不改；`scripts/check-tuya-qr.mjs` 26 项含**真实解码回环** |
 | pid 文件写明属主时，**访客不杀别人的子进程**；属主消失后才替换；无人拥有的接管后登记自己为属主 | `scripts/check-supervise-ownership.mjs` 10/10（用 `watchdogIntervalMs`/`watchdogFailures` 把 45 秒压缩到约 3 秒） |
 | **接管尚未就绪的进程，而不是杀掉它重启**（共享安装根下多实例互杀的回归） | `scripts/smoke-install.mjs` 第 8 节：pid 文件指向一个「1.5 秒后才应答 `/health`」的进程，启动后必须**等到它健康并接管**，且该进程**不能被 SIGTERM** |

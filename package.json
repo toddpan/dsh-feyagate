@@ -1,0 +1,93 @@
+{
+  "name": "@dsh-external/dsh-feyagate-gateway",
+  "version": "0.1.0",
+  "description": "FeyaGate 网关 × DSH —— 在 DSH 里托管本机 miloco-mcp-server，并提供服务/授权/账号的可视化设置界面",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/toddpan/dsh-feyagate.git"
+  },
+  "homepage": "https://github.com/toddpan/dsh-feyagate",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "feyagate",
+    "miloco",
+    "mcp",
+    "smart-home"
+  ],
+  "author": "toddpan",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "manifest",
+    "skills",
+    "README.md",
+    "NOTICE"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.16.0"
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:client": "tsdown",
+    "manifest": "node scripts/gen-manifest.mjs",
+    "check:manifest": "node scripts/verify-manifest.mjs",
+    "check:patch": "node scripts/check-patch.mjs",
+    "check": "npm run typecheck && npm run check:manifest && npm run check:patch && npm run check:download && node scripts/smoke.mjs --offline",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:install": "node scripts/smoke-install.mjs",
+    "test": "npm run build && npm run check && npm run smoke:install",
+    "check:download": "node scripts/selfcheck-download.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0-rc <5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "dependencies": {
+    "tar": "^7.4.3",
+    "yaml": "^2.5.1",
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/yauzl": "^3.4.0",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.0"
+  }
+}

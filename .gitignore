@@ -1,0 +1,13 @@
+node_modules/
+lib/
+*.tgz
+*.log
+.DS_Store
+
+# Local scratch: downloaded archives, extracted servers, generated manifests
+.cache/
+tmp/
+
+# 冒烟测试的临时安装根目录（会写入下载包、state.json 与日志）
+.smoke/
+.smoke-install/

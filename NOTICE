@@ -1,0 +1,56 @@
+# NOTICE
+
+dsh-feyagate-gateway
+Copyright (c) 2026 FeyaGate Contributors
+Licensed under the MIT License (see LICENSE).
+
+## This repository contains no binaries
+
+This plugin ships **source code, a manifest, and documentation only**. It does
+not contain, bundle, mirror, or re-package the `miloco-mcp-server` executable or
+any part of it — not in the repository, not in the published npm package, and
+not in any release artifact.
+
+At run time the plugin downloads a platform-specific build from channels
+operated by the rights holder, verifies its checksum against
+`manifest/server-manifest.json`, and installs it into the user's own machine
+(`~/.dsh/dsh-feyagate/`). The downloaded binary is **not** distributed by this
+project, and nothing in this repository grants any right to it.
+
+## The downloaded binary is licensed separately
+
+`miloco-mcp-server` is a separate work with its own distribution terms. Those
+terms are governed by the channel it is downloaded from — not by this project's
+MIT license. This plugin makes no representation about them, and its MIT license
+applies only to the plugin's own source.
+
+Anyone redistributing the binary, or operating a mirror of it, must satisfy the
+rights holder's terms themselves. Community forks of this plugin must not
+publish binary mirrors under this project's name; the download sources are
+configurable, so a fork should point at its own channel instead.
+
+## Xiaomi proprietary component — never distributed
+
+`miloco-mcp-server` loads a Xiaomi proprietary native library (shipped upstream
+as `lib/libmiot_camera_lite.{dylib,so}`) for camera P2P streaming. That library
+is proprietary to Xiaomi and is **never** downloaded, mirrored, bundled, or
+redistributed by this plugin.
+
+Some upstream builds do not include it. When it is absent, camera features are
+unavailable while every other platform keeps working; the plugin reports that
+condition explicitly (as a degraded state with a reason) instead of failing
+silently or pretending the feature exists.
+
+## Upstream attribution
+
+`miloco-mcp-server` describes itself as based on the Xiaomi Miloco project, and
+its source tree carries an MIT license file naming the FeyaGate/miloco-mcp-server
+authors. Third-party license obligations attached to the published binaries —
+including any copyleft obligations of components statically or dynamically
+linked into them (for example FFmpeg libraries on Linux, where the upstream
+package is dynamically linked and declares runtime dependencies such as
+`libavcodec`, `libavutil`, `libswscale`, `libssl3`, and `libyaml-cpp`) — are the
+responsibility of whoever publishes those binaries, and are **not** audited by
+this project.
+
+If you are the rights holder and want a correction here, open an issue.

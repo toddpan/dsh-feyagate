@@ -1,0 +1,89 @@
+# dsh-feyagate-gateway bundle patch
+#
+# Installed through the official CLI:
+#
+#   dsh plugin --profile <name> add @dsh-external/dsh-feyagate-gateway
+#
+# The command reconciles `dsh.profile.bundles` against installed packages and,
+# seeing `dsh.bundle.patch` in package.json, appends this bundle to the stack.
+# The profile boot then merges this patch as one more layer — no profile file
+# edits, no manual mount line.
+#
+# ── What gets inserted, and why two rows ─────────────────────────────────────
+#
+#   1. `feyagate-gateway`      the plugin itself: host half (supervises the
+#                              miloco-mcp-server child process, serves the
+#                              settings API) + browser half (settings UI).
+#   2. `feyagate-gateway-mcp`  the stock MCP bridge, pointed at the plugin's
+#                              own loopback facade instead of at the child
+#                              process directly.
+#
+# ── Why the bridge points at the plugin's facade ─────────────────────────────
+#
+# The obvious design is to point the bridge straight at miloco-mcp-server.
+# That breaks in three ways we measured:
+#
+#   * the child's HTTP port has to be configurable, but this YAML row is static
+#     text evaluated at boot;
+#   * the bridge's *default* reconnect budget is ~2.5 minutes (500ms doubling
+#     to 30s, 10 attempts) and then it unregisters the server's tools for good —
+#     so a user who installs the server *after* boot ends up with no tools and a
+#     "plugin is broken" impression. This patch raises the budget to 60 attempts
+#     (~30 minutes) as extra slack, but that is a buffer, not the fix: the fix is
+#     that the facade is up before the bridge's first attempt;
+#   * every version swap stops the child for a moment, which is fine, but a
+#     long download before the first start is not.
+#
+# So the plugin runs a tiny always-on loopback MCP facade and the bridge talks
+# to that. The facade answers `initialize` immediately, returns an empty tool
+# list while the child is absent, and proxies to the real child once healthy —
+# including `notifications/tools/list_changed` when it comes up. Consequences:
+#
+#   * the child's port stays a runtime detail, and changing it needs no restart;
+#   * installing the server later does not burn the reconnect budget;
+#   * swapping/upgrading the binary is invisible to the model.
+#
+# The facade port is the only port that must be known before the plugin's
+# `apply()` runs, because this row is evaluated before it. The expression below
+# reads it from the plugin's own state file (written by `apply()`, which the
+# loader has already awaited — entry rows are processed in order), and falls
+# back to the default when the file does not exist yet, which is exactly the
+# first-boot case. `process.getBuiltinModule` is how a `!!js` expression in an
+# ESM host reaches `node:fs` without `require`.
+- insert:
+    - id: feyagate-gateway
+      name: '@dsh-external/dsh-feyagate-gateway'
+    - id: feyagate-gateway-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: streamable-http
+        serverName: feyagate
+        # Multi-line quoted scalar: EVERY line of it, including the closing one,
+        # must be indented deeper than `url:` itself. A closing line at the same
+        # indent as the key makes the parser end the scalar early and the whole
+        # patch file fails to load — taking the profile's boot with it.
+        url: !!js "(() => {
+          try {
+            const fs = process.getBuiltinModule('node:fs');
+            const path = process.getBuiltinModule('node:path');
+            const os = process.getBuiltinModule('node:os');
+            const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+            const override = process.env.DSH_FEYAGATE_HOME;
+            const root = (override && override.trim()) || path.join(home, 'dsh-feyagate');
+            const file = path.join(root, 'state.json');
+            const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const port = (state.facade && state.facade.port) || 38081;
+            return 'http://127.0.0.1:' + port + '/mcp';
+          } catch (error) {
+            return 'http://127.0.0.1:38081/mcp';
+          }
+          })()"
+        # Camera/vision tool calls legitimately take minutes (P2P connect +
+        # snapshot + VLM round trip), so this is well above the 60s default.
+        toolCallTimeoutMs: 180000
+        failOnStartupError: false
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 60

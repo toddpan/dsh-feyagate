@@ -29,6 +29,8 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
+  ADOPT_GRACE_MS,
+  ADOPT_POLL_MS,
   CRASH_WINDOW_MS,
   MAX_CRASHES_PER_WINDOW,
   PORT_SCAN_RANGE,
@@ -222,21 +224,51 @@ export class Supervisor {
       if (record !== null) rmSync(this.pidFile(), { force: true })
       return null
     }
-    if (await probeHealth(record.port)) {
-      this.adoptedPid = record.pid
-      this.adoptedVersion = record.version
-      this.effectivePort = record.port
-      this.startedAt = record.startedAt || Date.now()
-      this.state.patch({ server: { effectivePort: record.port } })
-      this.log.info(`已接管此前运行中的后台服务（pid ${record.pid}，端口 ${record.port}，版本 ${record.version}）`)
-      this.startWatchdog()
-      this.onChange()
-      return { ok: true, port: record.port, error: null, adopted: true }
+    if (await probeHealth(record.port)) return this.adoptRecord(record)
+
+    // Alive but not answering yet. It may simply still be binding its port — and
+    // when several DSH instances share one install root, every boot sees the
+    // others' child in exactly this state. Killing here is what turns concurrent
+    // boots into a restart war (each instance kills the other's child, both
+    // respawn, repeat), so a recently started process gets its grace period
+    // first; if it comes up inside that window we adopt it instead.
+    const age = Date.now() - (record.startedAt || 0)
+    const budget = ADOPT_GRACE_MS - age
+    if (budget > 0) {
+      this.log.info(
+        `pid ${record.pid} 尚未响应健康检查（启动 ${(age / 1000).toFixed(1)}s），最多再等 ${(budget / 1000).toFixed(0)}s 接管，不重启别人的进程`,
+      )
+      if (await this.waitForHealth(record.port, budget)) return this.adoptRecord(record)
     }
+
     this.log.warn(`pid 文件指向的进程 ${record.pid} 无响应，将清理后重新启动`)
     await this.killPid(record.pid)
     rmSync(this.pidFile(), { force: true })
     return null
+  }
+
+  /** Record an adopted process and hand it to the watchdog. */
+  private adoptRecord(record: PidRecord): SpawnOutcome {
+    this.adoptedPid = record.pid
+    this.adoptedVersion = record.version
+    this.effectivePort = record.port
+    this.startedAt = record.startedAt || Date.now()
+    this.state.patch({ server: { effectivePort: record.port } })
+    this.log.info(`已接管此前运行中的后台服务（pid ${record.pid}，端口 ${record.port}，版本 ${record.version}）`)
+    this.startWatchdog()
+    this.onChange()
+    return { ok: true, port: record.port, error: null, adopted: true }
+  }
+
+  /** Poll `/health` until it answers, the budget runs out, or we are disposed. */
+  private async waitForHealth(port: number, budgetMs: number): Promise<boolean> {
+    const deadline = Date.now() + budgetMs
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, ADOPT_POLL_MS))
+      if (this.disposed) return false
+      if (await probeHealth(port)) return true
+    }
+    return false
   }
 
   private async spawnChild(version: string): Promise<SpawnOutcome> {

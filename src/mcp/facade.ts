@@ -20,6 +20,15 @@
  *   * pushes `notifications/tools/list_changed` over the GET event stream when
  *     the child appears, so the tool list fills in without a host restart.
  *
+ * Delivery is *eventual*, not fire-and-forget. The bridge's Streamable HTTP
+ * transport opens its GET stream exactly once and only reacts to
+ * `list_changed`; it never re-lists on its own. The child's health edge and
+ * the stream's establishment are two independent timelines, and either can
+ * miss the other, so the facade reconciles: a stream that opens while the
+ * child is already healthy is sent an immediate `list_changed`, and a change
+ * notified while no stream is open is marked pending and replayed (bounded,
+ * every five seconds) until some stream receives it or the child goes down.
+ *
  * Proxying the *raw* body rather than re-encoding each JSON-RPC message is
  * deliberate: batches, extra params, and future protocol revisions pass through
  * untouched, and the child stays the single source of truth for tool schemas.
@@ -48,6 +57,12 @@ const PROXY_TIMEOUT_MS = 180_000
 /** SSE keep-alive comment interval, so idle connections are not reaped. */
 const SSE_KEEPALIVE_MS = 15_000
 
+/** Retry interval for a `list_changed` that found no open stream to deliver to. */
+const LIST_CHANGED_RETRY_MS = 5_000
+
+/** Bound on retry attempts; gives the bridge roughly a minute to open its stream. */
+const LIST_CHANGED_MAX_RETRIES = 12
+
 export interface FacadeOptions {
   state: StateStore
   log: LogBuffer
@@ -55,6 +70,12 @@ export interface FacadeOptions {
   version: string
   /** Resolves the child's current HTTP port, or null when it is not running. */
   childPort: () => number | null
+  /**
+   * Live health probe, resolved from the supervisor (`healthy()`). Consulted
+   * when a stream opens, so a late bridge reconnect gets an immediate
+   * `list_changed` instead of waiting for the next (possibly never) edge.
+   */
+  isChildHealthy: () => Promise<boolean>
 }
 
 function json(res: ServerResponse, status: number, payload: unknown): void {
@@ -134,23 +155,96 @@ function localAnswer(message: JsonRpcMessage, version: string, reason: string): 
   }
 }
 
+/**
+ * A tool's `inputSchema` must be an object schema. Upstream builds ship `{}` for
+ * zero-argument tools — 7 of 76 in v1.2.19/v1.2.20 (`auth/platforms`,
+ * `tuya/refresh`, `ewelink/refresh`, `midea/refresh`, `auth/*_logout`) — and a
+ * strict client rejects the **whole** `tools/list` response over it: DSH's bridge
+ * validates `ListToolsResult`, `syncTools` throws before registering anything, and
+ * the model ends up with zero tools from a server that looks perfectly connected.
+ * The facade is the side that speaks MCP to the bridge, so it repairs the shape
+ * here — one fix that covers every upstream version already released.
+ */
+function normalizedInputSchema(schema: unknown): { schema: Record<string, unknown>; changed: boolean } {
+  const source = schema !== null && typeof schema === 'object' && !Array.isArray(schema) ? (schema as Record<string, unknown>) : {}
+  const next: Record<string, unknown> = { ...source }
+  let changed = false
+  if (next.type !== 'object') {
+    next.type = 'object'
+    changed = true
+  }
+  const properties = next.properties
+  if (properties === undefined || properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
+    next.properties = {}
+    changed = true
+  }
+  return { schema: next, changed }
+}
+
+/**
+ * Repair every `tools/list` result in a parsed JSON-RPC payload (single message
+ * or batch). Returns how many schemas actually changed, so callers can leave an
+ * already-conforming response byte-identical.
+ */
+function repairToolsListResult(payload: unknown): number {
+  const messages = Array.isArray(payload) ? payload : [payload]
+  let repaired = 0
+  for (const message of messages) {
+    if (message === null || typeof message !== 'object') continue
+    const result = (message as { result?: unknown }).result
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) continue
+    const tools = (result as { tools?: unknown }).tools
+    if (!Array.isArray(tools)) continue
+    for (const tool of tools) {
+      if (tool === null || typeof tool !== 'object' || Array.isArray(tool)) continue
+      const entry = tool as { inputSchema?: unknown }
+      const { schema, changed } = normalizedInputSchema(entry.inputSchema)
+      if (!changed) continue
+      entry.inputSchema = schema
+      repaired += 1
+    }
+  }
+  return repaired
+}
+
+/** True when the request body asks for `tools/list` (single message or batch). */
+function requestsToolsList(body: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(body)
+    const messages = Array.isArray(parsed) ? parsed : [parsed]
+    return messages.some((message) => message !== null && typeof message === 'object' && (message as JsonRpcMessage).method === 'tools/list')
+  } catch {
+    return false
+  }
+}
+
 export class McpFacade {
   private readonly state: StateStore
   private readonly log: LogBuffer
   private readonly version: string
   private readonly childPort: () => number | null
+  private readonly isChildHealthy: () => Promise<boolean>
 
   private server: Server | null = null
   private port: number | null = null
   /** Open server→client SSE streams (the GET side of Streamable HTTP). */
   private readonly streams = new Set<ServerResponse>()
   private keepalive: NodeJS.Timeout | null = null
+  /**
+   * Set when a `list_changed` was raised but no stream was open to receive
+   * it. Cleared on the first successful delivery, on the next health edge,
+   * or when the bounded retry timer expires.
+   */
+  private listChangedPending = false
+  private listChangedRetries = 0
+  private retryTimer: NodeJS.Timeout | null = null
 
   constructor(options: FacadeOptions) {
     this.state = options.state
     this.log = options.log
     this.version = options.version
     this.childPort = options.childPort
+    this.isChildHealthy = options.isChildHealthy
   }
 
   get listeningPort(): number | null {
@@ -206,6 +300,10 @@ export class McpFacade {
   async stop(): Promise<void> {
     if (this.keepalive !== null) clearInterval(this.keepalive)
     this.keepalive = null
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer)
+    this.retryTimer = null
+    this.listChangedPending = false
+    this.listChangedRetries = 0
     for (const stream of this.streams) {
       try {
         stream.end()
@@ -225,12 +323,24 @@ export class McpFacade {
   /**
    * Tell the connected client that the tool list changed.
    *
-   * Called when the child transitions to healthy. If the client never opened
-   * the GET stream, this is a no-op and the UI's "reload to mount tools" hint is
-   * the fallback — we prefer to do the right thing and degrade honestly rather
-   * than fake a capability the transport does not have.
+   * Called when the child transitions to healthy and when a stream opens
+   * while the child is already healthy. If no stream is open when the change
+   * happens, the notification is marked pending and replayed on a bounded
+   * retry interval until some stream receives it — the bridge never re-opens
+   * its GET stream or re-issues `tools/list` on its own, so a dropped
+   * one-shot notification would leave it on an empty tool list for the rest
+   * of the session.
    */
   notifyToolsChanged(): void {
+    if (this.deliverListChanged() > 0) {
+      this.log.info('已通知工具列表变化')
+      return
+    }
+    this.markListChangedPending()
+  }
+
+  /** Write `list_changed` to every open stream. Returns how many received it. */
+  private deliverListChanged(): number {
     const payload = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
     let delivered = 0
     for (const stream of this.streams) {
@@ -241,7 +351,41 @@ export class McpFacade {
         this.streams.delete(stream)
       }
     }
-    this.log.info(`已通知工具列表变化（${delivered} 个客户端流）`)
+    if (delivered > 0) {
+      this.clearListChangedPending()
+      this.log.info(`已通知工具列表变化（${delivered} 个客户端流）`)
+    }
+    return delivered
+  }
+
+  /** Remember a missed notification and arm the bounded retry timer. */
+  private markListChangedPending(): void {
+    this.listChangedPending = true
+    if (this.retryTimer !== null) return // a retry is already in flight
+    if (this.listChangedRetries >= LIST_CHANGED_MAX_RETRIES) {
+      this.listChangedPending = false
+      this.listChangedRetries = 0
+      this.log.warn('工具列表变化未送达（无客户端流，重试次数已用尽）')
+      return
+    }
+    this.listChangedRetries += 1
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      if (!this.listChangedPending) return
+      if (this.deliverListChanged() === 0) this.markListChangedPending()
+    }, LIST_CHANGED_RETRY_MS)
+    this.retryTimer.unref?.()
+    this.log.info(`工具列表变化暂无客户端流，${LIST_CHANGED_RETRY_MS / 1000}s 后重试（第 ${this.listChangedRetries}/${LIST_CHANGED_MAX_RETRIES} 次）`)
+  }
+
+  /** Drop a pending `list_changed` (e.g. the child went unhealthy again). */
+  clearListChangedPending(): void {
+    this.listChangedPending = false
+    this.listChangedRetries = 0
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -298,6 +442,35 @@ export class McpFacade {
     this.answerLocally(body, res)
   }
 
+  /**
+   * Repair a `tools/list` response on its way through the facade.
+   *
+   * This is the one response a strict client validates as a whole, so a single
+   * non-conforming `inputSchema` costs the model every tool the gateway has.
+   * Anything unexpected (non-JSON content type, unparsable body) is passed
+   * through untouched and logged rather than guessed at.
+   */
+  private repairToolsList(requestBody: string, responseBody: string, contentType: string): string {
+    if (responseBody === '' || !requestsToolsList(requestBody)) return responseBody
+    if (!contentType.includes('json')) {
+      // The child answers JSON to this call (we forward no `Accept`), so a
+      // different content type means something changed upstream — say so
+      // instead of silently skipping the repair.
+      this.log.warn(`tools/list 返回了非 JSON 内容（${contentType}），未做 inputSchema 归一化`)
+      return responseBody
+    }
+    try {
+      const parsed: unknown = JSON.parse(responseBody)
+      const repaired = repairToolsListResult(parsed)
+      if (repaired === 0) return responseBody
+      this.log.info(`已修正 ${repaired} 个工具的 inputSchema（上游缺 type:"object"，不修会让桥丢掉全部工具）`)
+      return JSON.stringify(parsed)
+    } catch (error) {
+      this.log.warn(`tools/list 响应无法解析，未做 inputSchema 归一化：${(error as Error).message}`)
+      return responseBody
+    }
+  }
+
   /** Proxy one request to the child. Returns null when the child is unreachable. */
   private async proxy(port: number, body: string): Promise<{ status: number; body: string; contentType: string } | null> {
     try {
@@ -307,10 +480,11 @@ export class McpFacade {
         body,
         signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
       })
+      const contentType = response.headers.get('content-type') ?? 'application/json; charset=utf-8'
       return {
         status: response.status,
-        body: await response.text(),
-        contentType: response.headers.get('content-type') ?? 'application/json; charset=utf-8',
+        body: this.repairToolsList(body, await response.text(), contentType),
+        contentType,
       }
     } catch (error) {
       this.log.warn(`转发到后台服务失败（端口 ${port}）：${(error as Error).message}`)
@@ -352,8 +526,15 @@ export class McpFacade {
    * The server→client half of Streamable HTTP. The MCP SDK opens this with
    * `Accept: text/event-stream`; it is the only channel over which
    * `tools/list_changed` can reach the client, so it must stay open.
+   *
+   * Reconciliation on open: the child's health edge and this stream's
+   * establishment are independent, so whichever happened first does not
+   * know about the other. If the child is *already* healthy, send an
+   * immediate `list_changed` so this (late) bridge fills its tool list now
+   * instead of never; if a notification was missed earlier, replay it.
+   * Both are idempotent — the bridge simply re-lists.
    */
-  private openStream(req: IncomingMessage, res: ServerResponse): void {
+  private async openStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const accept = String(req.headers.accept ?? '')
     if (!accept.includes('text/event-stream')) {
       json(res, 406, { error: 'GET 需要 Accept: text/event-stream' })
@@ -372,5 +553,19 @@ export class McpFacade {
     }
     req.on('close', drop)
     res.on('close', drop)
+
+    const replayed = this.listChangedPending
+    let healthy = false
+    try {
+      healthy = await this.isChildHealthy()
+    } catch {
+      // A probe failure means "not healthy"; the normal health edge will
+      // still deliver a fresh `list_changed` later.
+    }
+    if (replayed || healthy) {
+      // Only send if the stream is still open: a client that dropped in
+      // the probe window reconnects and gets its own reconciliation.
+      if (this.streams.has(res)) this.deliverListChanged()
+    }
   }
 }

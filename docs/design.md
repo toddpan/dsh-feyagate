@@ -202,7 +202,8 @@ url: !!js "(() => { ... read $DSH_HOME/dsh-feyagate/state.json ... })()"
 | `scripts/smoke.mjs` | ✅ 端到端冒烟（真下载 / 真校验 / 真解压 / 真启动） |
 | `docs/design.md` | 本文 |
 | `docs/user-guide.zh.md` | 面向最终用户的操作手册 |
-| `docs/adr/0001…0007` | 7 条决策记录 |
+| `docs/adr/0001…0008` | 8 条决策记录 |
+| `docs/verify-mcp-inputschema-fix.md` | 验证记录：上游 `inputSchema` 不合规导致桥丢掉全部工具（已修 + 真机复验） |
 
 ---
 

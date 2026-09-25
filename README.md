@@ -53,7 +53,7 @@ npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.1.0`
 
 三条要点：
 
-1. **桥连的是插件自己的常驻门面，不是子进程**。门面端口写进 `state.json`，由 [`cordis.patch.yml`](cordis.patch.yml) 里的 `!!js` 表达式在 boot 时读取；子进程没装也能秒回 `initialize`（只返回空工具表），因此"先启动 DSH 再装服务"不会烧掉 MCP 桥的重连预算，升级窗口对模型也是零感知。
+1. **桥连的是插件自己的常驻门面，不是子进程**。门面端口写进 `state.json`，由 [`cordis.patch.yml`](cordis.patch.yml) 里的 `!!js` 表达式在 boot 时读取；子进程没装也能秒回 `initialize`（只返回空工具表），因此"先启动 DSH 再装服务"不会烧掉 MCP 桥的重连预算，升级窗口对模型也是零感知。`tools/list_changed` 的送达是**最终一致**的：桥的 SSE 流建立时若子进程已健康，门面立即补发一次；通知发出时若暂无客户端流，则标记 pending 并有界重发（5s/次、上限 12 次）——两种时序下桥都不需要重启 DSH 即可拿到工具列表。
 2. **子进程真实端口是运行期细节**。默认 `38080`，被占用时在 20 个端口范围内漂移；期望端口进 `state.json` 的 `server.port`，实际生效的端口在启动这一轮写进生成的 `config.yaml`，不写进任何静态配置。
 3. **安装根目录本身是不可移动的**。`config.yaml` 就放在根目录，子进程把设备身份与许可证锚定在 `config.yaml` 所在目录 —— 根目录一换就等于换了一份身份（见下方「数据在哪里」与 [ADR-0002](docs/adr/0002-install-directory.md)）。
 
@@ -107,7 +107,7 @@ MVP 的账号页是**只读总览**。登录动作在对话里让模型调用对
 | 进程守护 | spawn / PID 文件 / 孤儿与多实例清理 / `/health` 轮询（40 × 500ms）/ 崩溃退避重启（1s→30s）/ 熔断（60 秒内 5 次崩溃停止自动重启） |
 | 端口管理 | 默认 `38080`，占用时在 20 个端口内漂移；期望端口留在 `state.json` 的 `server.port`，本次实际端口记进 `server.effectivePort` 并写进生成的 `config.yaml` |
 | config.yaml 生成 | 插件是**唯一写者**，字段归属见 [ADR-0003](docs/adr/0003-generated-config.md)；子进程会回写的字段读回合并，不覆盖 |
-| MCP 接入 | 官方 `@deepseek-ai/dsh-mcp-client` 桥指向插件常驻门面（`127.0.0.1:38081`），工具以 `mcp__feyagate__*` 出现 |
+| MCP 接入 | 官方 `@deepseek-ai/dsh-mcp-client` 桥指向插件常驻门面（`127.0.0.1:38081`），工具以 `mcp__feyagate__*` 出现；`tools/list_changed` 最终送达（流建立补发 + pending 有界重发），装服务/改端口后桥无需重启 DSH |
 | 76 个 MCP 工具（数量出自 `FeyaGate_MCP_API.md` §4 的自述） | 设备/摄像头/场景/定时/触发规则/记忆/技能/小智/授权查询，全部经门面代理到子进程 |
 | 设置界面 · 服务 | 概览 / 安装与重装 / 升级与版本 / 端口与网络 / 日志与诊断 / 危险区 |
 | 设置界面 · 授权 | 许可证与试用期：版本、状态、到期、宽限、授权码写入、设备 ID、各平台试用剩余 |
@@ -282,7 +282,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 | 症状 | 可能原因 | 处理 |
 |---|---|---|
 | 启动时提示 `feyagate-gateway … did not activate` / `failed to import` | 装的是**源码目录或 git 依赖**，而 `lib/` 是构建产物、不在仓库里；宿主 `import` 不到入口 | 在该包目录跑 `npm install && npm run build`（`prepare` 脚本会在 `npm install` 时自动构建；`dsh plugin add <本地路径>` 用 `link:` 语义、不会触发它）。npm 安装的正式包自带 `lib/`，不受影响 |
-| 工具列表里没有 `mcp__feyagate__*` | ① 插件没装进当前 profile；② MCP 桥行没生效；③ 桥连不上门面（门面端口被改但没有重启 DSH） | ① `dsh plugin --profile <p> why @dsh-external/dsh-feyagate-gateway`；② 检查 profile 的 bundle 列表里有没有本插件；③ 设置 › 飞阳网关 › 服务 看状态条，重启 DSH 让 patch 重新求值 |
+| 工具列表里没有 `mcp__feyagate__*` | ① 插件没装进当前 profile；② MCP 桥行没生效；③ 桥连不上门面（门面端口被改但没有重启 DSH）；④ 后台服务尚未装/尚未健康（门面如实回空表）；⑤ **上游工具清单不合规**：零参数工具的 `inputSchema` 是 `{}`（缺 `type:"object"`），严格客户端会**整份拒收** `tools/list` ⇒ 一个工具都注册不上（服务却显示"已连接"） | ① `dsh plugin --profile <p> why @dsh-external/dsh-feyagate-gateway`；② 检查 profile 的 bundle 列表里有没有本插件；③ 设置 › 飞阳网关 › 服务 看状态条，重启 DSH 让 patch 重新求值；④ 装/启动后台服务后**无需重启 DSH**：服务健康后门面自动（必要时补发）`tools/list_changed`，桥随即 re-sync 出工具；⑤ **已修**：门面转发 `tools/list` 时会把不合规的 `inputSchema` 补齐成 `{type:"object", properties:{}}`（见 [docs/verify-mcp-inputschema-fix.md](docs/verify-mcp-inputschema-fix.md)），升级插件后重启 DSH 即可。判断方法：插件的 `logs` 里会有一行 `已修正 N 个工具的 inputSchema` |
 | 工具列表里**有**工具但调用失败 | 后台服务没起 / 正在升级 / 门面还没代理到子进程 | 看状态条：`未安装` → 点安装；`异常` → 看日志；`升级中` → 等 10–20 秒 |
 | 服务起不来：**端口被占用** | HTTP 端口被别的进程占了（常见：另一份 miloco / 既有 `~/.feyagate` 安装） | 界面报 `FG-PORT-001` 并给出占用 PID；点「换一个端口」（插件会在 20 个端口内漂移）或结束占用进程 |
 | 服务起不来：**macOS 未签名被拦** | Gatekeeper 拦下未公证的第三方二进制 | 界面报 `FG-PERM-001`，给两条路：系统设置 › 隐私与安全性 ›「仍要打开」，或复制 `xattr -dr com.apple.quarantine <安装目录>/versions/<ver>/miloco-mcp-server`。受 MDM 管理的机器绕不过去 |
@@ -320,7 +320,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 - 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
 - **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
 - **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）。
-- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **125 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 77 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
+- **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **138 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 90 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
 - 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
 - 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
@@ -375,7 +375,9 @@ app/dsh-feyagate/
 └── docs/
     ├── design.md             工程内设计文档（双半侧边界、MCP 选型、状态机、字段归属）
     ├── user-guide.zh.md      面向最终用户的操作手册
-    └── adr/0001…0007         7 条架构决策记录
+    ├── verify-mcp-inputschema-fix.md
+    │                         验证记录：AI 看不到工具的真实根因（上游 inputSchema 不合规）与修复
+    └── adr/0001…0008         8 条架构决策记录（0008：多实例共享安装根时的接管策略）
 ```
 
 ### 每个脚本做什么
@@ -388,16 +390,17 @@ app/dsh-feyagate/
 | `scripts/selfcheck-download.mjs` | 下载/校验/解压层的单元自检（用构造出来的归档，不联网）：校验失败必须删掉坏包且绝不落位、无校验值默认拒绝、顶层目录上移、找不到二进制时报错而不是静默成功 |
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
-| `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 卸载保数据 → 启动即失败（77 项断言） |
+| `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 接管未就绪进程 → 卸载保数据 → 启动即失败（90 项断言） |
 | `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
 | `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 |
-| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（125 项计数断言） |
+| `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（138 项计数断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |
 | `npm run build:client` | 只跑 tsdown，快速迭代浏览器半侧 |
 
 ### 改代码前请先读
 
 - [`docs/design.md`](docs/design.md)：双半侧职责边界、为什么桥指向门面、状态机、配置字段归属表。
+- [`docs/verify-mcp-inputschema-fix.md`](docs/verify-mcp-inputschema-fix.md)：**AI 看不到 `mcp__feyagate__*` 工具**的根因链与修复证据（含真机复验与复现命令）。
 - [`docs/adr/`](docs/adr)：7 条已定决策与它们的**替代方案被否的理由**。改架构前先看有没有撞上其中一条。
 - [`../../docs/DSH-插件机制研究报告.md`](../../docs/DSH-插件机制研究报告.md)：DSH 插件机制的实证结论（每条带文件:行号）。
 
@@ -418,12 +421,13 @@ app/dsh-feyagate/
 
 ### 已经实测过的部分
 
-`npm test` 全绿（24 + 19 + 77 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
+`npm test` 全绿（24 + 19 + 90 项断言，另有下载层 5 项自检与清单结构校验）。具体覆盖：
 
 | 验证对象 | 证据 |
 |---|---|
 | patch 能被 DSH 解析，且 `!!js` 表达式在 boot 时读到 `state.json` 的漂移端口 | `scripts/check-patch.mjs` 24/24：用官方同款 `parseDocument` + `tag:yaml.org,2002:js` 解析，再按加载器的方式 `new Function('ctx','expr','with(ctx){return eval(expr)}')` 求值；同时验证 `state.json` 缺失/损坏时不抛异常（否则 DSH 启动就会炸） |
 | 门面在**没有任何子进程**时就能应答 `initialize`、`tools/list` 返回空数组、`tools/call` 明确报错 | `scripts/smoke.mjs`：这是整套架构的前提 |
+| 门面把上游不合规的 `inputSchema: {}` **补齐**成对象 schema，且修完的整份 `tools/list` 能通过**真实 SDK** 的 `ListToolsResult` 校验 | `scripts/smoke-install.mjs` 第 1 节：合成子进程里**故意**放一个零参数工具（`auth/platforms`，`inputSchema: {}`），断言 ① 门面输出 `type:"object"` ② 已合规的 schema 逐字节未被改写 ③ **同一时刻直连子进程拿到的仍是 `{}`**（对照，证明是门面修的）④ 用 DSH 自带 `@modelcontextprotocol/client` 的 `specTypeSchemas.ListToolsResult` 校验通过 |
 | 管理 API 的 Origin 校验、设置校验、端口漂移 | `scripts/smoke.mjs` |
 | 校验失败后**删除坏包**（否则下次会复用半截文件）、找不到二进制时报错而非静默成功 | `scripts/selfcheck-download.mjs` 5/5 |
 | 校验值不匹配必须拒绝，且不破坏现有安装 | `scripts/smoke-install.mjs` 第 4 节：清单里给真实 sha256，本地文件被改一个字节 → 拒绝，并在错误里同时给出期望值与实际值 |
@@ -431,8 +435,9 @@ app/dsh-feyagate/
 | zip 与 tar.gz 两条解压分支、单层顶层目录拍平、可执行位、`config.yaml` 落在安装根目录且 `0600` | `scripts/smoke-install.mjs` 第 1–2 节 |
 | 启动 → 健康检查 → 门面转发真实工具列表 → REST `{code,data}` 解包 | `scripts/smoke-install.mjs` 第 1 节 |
 | 升级后回滚目标仍然可用、回滚后服务健康 | `scripts/smoke-install.mjs` 第 2–3 节 |
-| 子进程被 `SIGKILL` 后自动拉起（换 pid、重启计数 +1） | `scripts/smoke-install.mjs` 第 6 节 |
-| 卸载删除版本目录但**保留 `data/`** | `scripts/smoke-install.mjs` 第 8 节 |
+| 子进程被 `SIGKILL` 后自动拉起（换 pid、重启计数 +1） | `scripts/smoke-install.mjs` 第 7 节 |
+| **接管尚未就绪的进程，而不是杀掉它重启**（共享安装根下多实例互杀的回归） | `scripts/smoke-install.mjs` 第 8 节：pid 文件指向一个「1.5 秒后才应答 `/health`」的进程，启动后必须**等到它健康并接管**，且该进程**不能被 SIGTERM** |
+| 卸载删除版本目录但**保留 `data/`** | `scripts/smoke-install.mjs` 第 9 节 |
 | **重装**必须真的重装（默认幂等会让它静默变成空操作），且不得把当前版本悄悄换成别的版本 | `scripts/smoke-install.mjs` 第 6 节：先把已安装的程序改坏，重装后逐字节恢复、服务重新健康、版本未变 |
 | `webui_dir` 必须是**版本目录内的绝对路径**（相对路径下子进程必然找不到，只打一行 warning 就禁用内置 WebUI） | `scripts/smoke-install.mjs` 第 1 节 |
 | 任务只登记**真正尝试过**的下载来源（未配置的镜像不算"试过"） | `scripts/smoke-install.mjs` 第 1 节 |
@@ -456,6 +461,7 @@ mac-arm64 `v1.2.20`，从 GitHub Releases 真下载 **6,901,681 字节**，本�
 3. `dsh.client.inject` 只列 `@deepseek-ai/dsh-client-ui-slots`，而 [`tsdown.config.ts`](tsdown.config.ts) 允许外部化的名单有 8 项（`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`-client-store`、`-client-ui-slots`、`-client-ui-primitives`）。这是**有意的不对称**：外部化名单是"允许留成裸 require 的上限"，`inject` 是"实际依赖的清单"，而 `client/index.tsx` 刻意不引 primitives。**如果界面以后开始引 primitives 或 store，必须同步加进 `inject`**，否则前端加载会失败。
 4. ~~`server.ws_port` 无常量~~ **已修正**：新增 `DEFAULT_WS_PORT`（`constants.ts`），`config-gen.ts` 引用它。它不暴露在界面上 —— 插件自身不跑 WebSocket（MCP 桥走 Streamable HTTP），但子进程要求该字段存在。
 5. `huawei.device_id` / `device_name`：子进程读取它们，但插件**不生成**（不在 `MANAGED_FIELDS` 里），源码里也没有对应的回写函数。这两个值的来源尚未核实。
+6. **多个 DSH 实例共享一个安装根**（`~/.dsh/dsh-feyagate`：`state.json` / `server.pid` / `versions/` / `cache/` 各一份）。本机实测有三个实例跑同一个 profile，2026-09-25 18:16–18:20 期间后台服务被 `Received signal 15` 杀了 8 次、每次退避重启 —— 每个实例启动时都看到"别人的子进程还没应答健康检查"，于是**杀掉它并自己拉一个**，形成互杀。已修：给"活着但尚未应答"的进程 **30 秒宽限**（`ADOPT_GRACE_MS`），期间轮询并优先**接管**（见 [ADR-0008](docs/adr/0008-shared-install-root.md) 与 `scripts/smoke-install.mjs` 第 8 节）。**仍未解决**：① 看门狗在"连续 3 次健康检查失败"（约 45s）后仍会对**接管来的**子进程发 SIGTERM —— 子进程真的卡死时多个实例仍可能各杀一次；② 多个实例会互相覆盖 `state.json` 里的 `effectivePort`；③ 建议日常只保留**一个** DSH 实例使用本插件。
 
 ---
 

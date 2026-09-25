@@ -29,6 +29,8 @@
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
 import {
   chmodSync,
   copyFileSync,
@@ -36,13 +38,14 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = join(fileURLToPath(import.meta.url), '..', '..')
 const keep = process.argv.includes('--keep')
@@ -65,6 +68,39 @@ const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest(
 async function fetchJson(url, init) {
   const response = await fetch(url, init)
   return { status: response.status, body: await response.json().catch(() => null) }
+}
+
+/**
+ * Borrow the DSH client's own `ListToolsResult` schema from a DSH install, if one
+ * is present. That is the exact validator that rejected the real upstream tool
+ * list (`Invalid input: expected "object"` at `tools.N.inputSchema.type`) and made
+ * the bridge register nothing, so passing it is the strongest form of the
+ * regression check. Optional on purpose: the structural checks always run, and a
+ * machine without DSH must not fail this suite.
+ */
+async function loadListToolsSchema() {
+  const base = join(homedir(), 'Library', 'Application Support', 'DSH', 'data', 'versions')
+  if (!existsSync(base)) return null
+  let versions = []
+  try {
+    versions = readdirSync(base).sort().reverse()
+  } catch {
+    return null
+  }
+  for (const version of versions) {
+    const anchor = join(base, version, 'package.json')
+    if (!existsSync(anchor)) continue
+    try {
+      const require = createRequire(anchor)
+      const entry = require.resolve('@modelcontextprotocol/client')
+      const sdk = await import(pathToFileURL(entry).href)
+      const schema = sdk.specTypeSchemas?.ListToolsResult
+      if (typeof schema?.safeParse === 'function') return schema
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 // ───────────────────────────────────────────────────────── the fake "binary"
@@ -96,6 +132,11 @@ const json = (res, body, status) => {
 const TOOLS = [
   { name: 'gateway/info', description: '网关信息', inputSchema: { type: 'object', properties: {} } },
   { name: 'device/list', description: '设备列表', inputSchema: { type: 'object', properties: {} } },
+  // Zero-argument tools are the real defect: upstream ships \`{}\` here (no
+  // \`type:"object"\`), and a strict client then rejects the *entire* tools/list
+  // response — 76 tools become zero, with a server that still looks connected.
+  // The facade must repair it on the way through.
+  { name: 'auth/platforms', description: '平台列表（零参数）', inputSchema: {} },
 ]
 
 const server = createServer((req, res) => {
@@ -405,7 +446,52 @@ console.log('— 1. 安装 zip（本地包来源 + sha256 校验 + 解压 + 启�
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   })
   const tools = proxied.body?.result?.tools ?? []
-  check('门面转发到子进程并返回工具列表', tools.length === 2, `${tools.length} 个工具`)
+  check('门面转发到子进程并返回工具列表', tools.length === 3, `${tools.length} 个工具`)
+
+  // Regression: upstream ships `inputSchema: {}` for zero-argument tools. A strict
+  // client validates the whole `tools/list` response, so one such tool used to cost
+  // the model every tool (DSH's bridge registered nothing at all).
+  const zeroArg = tools.find((tool) => tool.name === 'auth/platforms')
+  check(
+    '门面补齐了零参数工具的 inputSchema（type:"object"）',
+    zeroArg?.inputSchema?.type === 'object' && typeof zeroArg?.inputSchema?.properties === 'object',
+    JSON.stringify(zeroArg?.inputSchema),
+  )
+  check(
+    '所有工具的 inputSchema 都是对象 schema',
+    tools.every((tool) => tool?.inputSchema?.type === 'object'),
+    tools.filter((tool) => tool?.inputSchema?.type !== 'object').map((tool) => tool.name).join(', ') || '全部合规',
+  )
+  check(
+    '已合规的 schema 未被改写（响应保持原样）',
+    JSON.stringify(tools.find((tool) => tool.name === 'device/list')?.inputSchema) === JSON.stringify({ type: 'object', properties: {} }),
+  )
+
+  // Control: the child still answers with the non-conforming schema, so the repair
+  // is provably happening at the facade rather than in the fixture.
+  const childDirect = await fetchJson(`http://127.0.0.1:${running?.effectivePort}/mcp/http`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  })
+  const childZeroArg = (childDirect.body?.result?.tools ?? []).find((tool) => tool.name === 'auth/platforms')
+  check(
+    '（对照）子进程原样返回不合规 schema —— 证明是门面修的',
+    JSON.stringify(childZeroArg?.inputSchema) === '{}',
+    JSON.stringify(childZeroArg?.inputSchema),
+  )
+
+  const listSchema = await loadListToolsSchema()
+  if (listSchema === null) {
+    console.log('    · 跳过真实 SDK 校验（本机没有可解析的 @modelcontextprotocol/client）')
+  } else {
+    const parsed = listSchema.safeParse(proxied.body?.result)
+    check(
+      '门面的 tools/list 能通过真实 SDK 的 ListToolsResult 校验',
+      parsed.success === true,
+      parsed.success ? '' : JSON.stringify({ success: parsed.success, issues: parsed.issues ?? [] }).slice(0, 400),
+    )
+  }
 
   const attempted = (await fetchJson(`${apiBase}/jobs/current`)).body?.data?.job?.attemptedSources ?? []
   check(
@@ -537,9 +623,80 @@ console.log('\n— 7. 子进程被杀后自动拉起')
   check('记录了重启次数', (recovered?.restarts ?? 0) >= 1, `restarts=${recovered?.restarts}`)
 }
 
-// ───────────────────────────────── 8. uninstall keeps user data
+// ───────────── 8. adoption must not kill a process that is still starting
+//
+// Regression for the shared-install-root restart war: several DSH instances share
+// one pid file, so a boot that finds the other instance's child still binding its
+// port used to SIGTERM it and spawn its own — and the other instance then did the
+// same to the replacement, in a loop. The supervisor must wait out a recently
+// started process and adopt it, not kill it.
 
-console.log('\n— 8. 卸载保留 data/')
+console.log('\n— 8. 接管尚未就绪的进程（共享安装根的多实例互杀回归）')
+{
+  const currentVersion = state().currentVersion
+  const stoppedRequest = await fetchJson(`${apiBase}/service/stop`, { method: 'POST', headers, body: '{}' })
+  check('先停掉服务以模拟"上一个实例留下的进程"', stoppedRequest.body?.ok === true, stoppedRequest.body?.error)
+  const stopped = await waitForState('stopped', 20_000)
+  check('服务已停止', stopped?.state === 'stopped', `state=${stopped?.state}`)
+
+  // A stand-in for "someone else's child, still binding its port": it answers
+  // /health only after 1.5s — exactly the window in which the old code decided
+  // the recorded pid was wedged and killed it.
+  const adoptPort = await new Promise((resolve) => {
+    const probe = createServer()
+    probe.listen(0, '127.0.0.1', () => {
+      const assigned = probe.address().port
+      probe.close(() => resolve(assigned))
+    })
+  })
+  const helper = spawn(process.execPath, ['-e', `
+    const { createServer } = require('node:http')
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'ok' }))
+    })
+    setTimeout(() => server.listen(${adoptPort}, '127.0.0.1'), 1500)
+  `], { stdio: 'ignore' })
+  await sleep(300)
+  const helperPid = helper.pid
+  writeFileSync(
+    join(base, 'root', 'server.pid'),
+    JSON.stringify({ pid: helperPid, port: adoptPort, version: currentVersion, startedAt: Date.now() }),
+  )
+
+  const startRequest = await fetchJson(`${apiBase}/service/start`, { method: 'POST', headers, body: '{}' })
+  check('启动请求被接受', startRequest.body?.ok === true, startRequest.body?.error)
+
+  const adopted = await waitForState('running', 40_000)
+  check(
+    '接管了正在启动的进程（而不是杀掉它重新拉起）',
+    adopted?.state === 'running' && adopted?.healthy === true,
+    `state=${adopted?.state} pid=${adopted?.pid}`,
+  )
+  check('状态里的 pid 就是那个尚未就绪的进程', adopted?.pid === helperPid, `期望 ${helperPid}，实际 ${adopted?.pid}`)
+  let helperAlive = true
+  try {
+    process.kill(helperPid, 0)
+  } catch {
+    helperAlive = false
+  }
+  check('那个进程没有被杀掉（旧行为会 SIGTERM 它）', helperAlive, `pid=${helperPid}`)
+
+  // Hand the following steps a real child again.
+  try {
+    helper.kill('SIGTERM')
+  } catch {
+    /* 已经退出 */
+  }
+  const restartRequest = await fetchJson(`${apiBase}/service/restart`, { method: 'POST', headers, body: '{}' })
+  check('恢复真实服务供后续步骤使用', restartRequest.body?.ok === true, restartRequest.body?.error)
+  const realAgain = await waitForState('running', 60_000)
+  check('真实服务重新运行', realAgain?.state === 'running' && realAgain?.healthy === true, `state=${realAgain?.state}`)
+}
+
+// ───────────────────────────────── 9. uninstall keeps user data
+
+console.log('\n— 9. 卸载保留 data/')
 {
   const dataDir = join(base, 'root', 'data')
   mkdirSync(dataDir, { recursive: true })
@@ -566,9 +723,9 @@ console.log('\n— 8. 卸载保留 data/')
   check('状态报告未安装', after?.state === 'not-installed', `state=${after?.state} detail=${after?.detail ?? ''}`)
 }
 
-// ───────────── 9. a payload that cannot start fails fast, quoting its own output
+// ───────────── 10. a payload that cannot start fails fast, quoting its own output
 
-console.log('\n— 9. 启动即失败：快速失败并带出子进程输出')
+console.log('\n— 10. 启动即失败：快速失败并带出子进程输出')
 {
   // The synthetic releases live behind example.invalid, so the payload is
   // delivered through the same "local archive" source the other steps use.

@@ -92,6 +92,10 @@ export class GatewayRuntime {
       // Read on every request, which is what makes the child's port a runtime
       // detail rather than something baked into the profile patch.
       childPort: () => this.state.get().server.effectivePort,
+      // The facade consults this when a stream opens, so a bridge that
+      // connects after the child is already healthy gets an immediate
+      // `list_changed` instead of an empty tool list for the whole session.
+      isChildHealthy: () => this.supervisor?.healthy() ?? Promise.resolve(false),
     })
     this.childApi = new ChildApi({
       log: this.log,
@@ -123,8 +127,11 @@ export class GatewayRuntime {
     if (healthy && !this.lastHealthy) {
       this.lastHealthy = true
       this.facade.notifyToolsChanged()
-    } else if (!healthy) {
+    } else if (!healthy && this.lastHealthy) {
       this.lastHealthy = false
+      // The list is empty again: drop any pending delivery so the next
+      // healthy edge (or a later stream) starts the retry budget fresh.
+      this.facade.clearListChangedPending()
     }
   }
 

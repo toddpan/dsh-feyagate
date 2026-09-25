@@ -52,6 +52,21 @@ export const MAX_CRASHES_PER_WINDOW = 5
 /** Stop sequence: SIGTERM, wait, then SIGKILL. */
 export const STOP_GRACE_MS = 5000
 
+/**
+ * How long a recorded pid that is alive but not yet answering `/health` is given
+ * to finish starting before it is treated as wedged.
+ *
+ * Several DSH instances share one install root (and therefore one pid file), so
+ * "no answer right now" usually means "someone else's child is still binding its
+ * port". Killing it there is what turns concurrent boots into a restart war:
+ * each instance kills the other's child and both respawn. Waiting it out lets
+ * the instance that lost the race adopt the winner's process instead.
+ */
+export const ADOPT_GRACE_MS = 30_000
+
+/** Poll interval used while waiting out `ADOPT_GRACE_MS`. */
+export const ADOPT_POLL_MS = 500
+
 /** Download knobs. */
 export const DOWNLOAD_TIMEOUT_MS = 120_000
 export const DOWNLOAD_MAX_REDIRECTS = 5

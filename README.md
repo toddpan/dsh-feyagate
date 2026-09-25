@@ -3,7 +3,12 @@
 > **这个文件解决什么问题**：让三类读者各自在 3 分钟内找到自己要看的东西 —— 想装的人拿到最短安装路径，想贡献的人拿到开发环境与目录职责，关心合规的人拿到"仓库里到底有什么、没有什么"。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.3.0`
+npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.3.1`
+
+> **0.3.1 变更**：重新生成 `manifest/server-manifest.json`。上游 `miloco-mcp-server` v1.2.20 的 mac-arm64 产物
+> 已于 2026-09-25 重新打包并覆盖发布（旧包缺 4 个依赖库导致启动即 `dyld: Library not loaded`，且 MQTT 未编入
+> 导致华为设备能登录却无法控制）。清单里的 sha256 必须跟着更新，否则安装会以**校验不通过**结束 ——
+> 请先升级插件到 `0.3.1` 再安装/升级后台服务。
 
 ---
 
@@ -442,7 +447,7 @@ app/dsh-feyagate/
 
 ## 实现状态（诚实声明）
 
-本 README 描述的是 **0.3.0 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
+本 README 描述的是 **0.3.1 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
 
 - ✅ 双半侧都已在源码里：Host（`index.ts`、`runtime.ts`、`install.ts`、`supervise/*`、`mcp/facade.ts`、`api.ts`、`config-gen.ts`、`download/*`、`child-api.ts`、`settings.ts`）与浏览器半侧（`client/index.tsx` + `client/contract.ts`）。
 - ✅ 工具链齐全：`scripts/{build.sh,gen-manifest.mjs,verify-manifest.mjs,check-patch.mjs,smoke.mjs,smoke-install.mjs}`，`lib/` 是构建产物（已 gitignore）。

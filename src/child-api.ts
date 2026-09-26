@@ -199,6 +199,17 @@ export class ChildApi {
   }
 
   /**
+   * POST /api/v1/platform/xiaomi/logout — v1.2.21 起上游提供米家退出路由。
+   * 返回 null 表示服务不可达或没有该路由（旧版本构建）。
+   */
+  async xiaomiLogout(): Promise<{ success: boolean; message: string } | null> {
+    return this.rest<{ success: boolean; message: string }>('/api/v1/platform/xiaomi/logout', {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  /**
    * Call an MCP tool directly and unwrap the text payload.
    *
    * Tool results are text-first (`content: [{type:'text', text:'<json>'}])`);

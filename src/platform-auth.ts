@@ -26,7 +26,7 @@
 import { TUYA_STATUS_LONG_POLL_MS, TUYA_STATUS_POLL_INTERVAL_MS } from './constants.js'
 import { type ChildApi } from './child-api.js'
 import { type LogBuffer } from './log.js'
-import { isTuyaToken, tuyaQrImagePath, tuyaQrPayload, tuyaQrTextPath } from './tuya-qr.js'
+import { isTuyaToken, TUYA_WAITING_MSG_RE, tuyaQrImagePath, tuyaQrPayload, tuyaQrTextPath } from './tuya-qr.js'
 import type { AuthCapabilities, TuyaQrStatus, TuyaQrTicket } from './types.js'
 
 /** The regions the child's `xiaomi/auth_url` accepts (its own enum). */
@@ -271,8 +271,22 @@ export class PlatformAuth {
         return { status: 'authorized', uid: str(record.uid), timedOut: false }
       }
       if (status === 'error' || status === 'expired' || status === 'invalid') {
-        const detail = toolFailure(payload, '二维码已失效')
-        return { status: 'error', uid: null, timedOut: false, message: detail }
+        // 三种 error 里只有一种是真正的终态：涂鸦给出明确答复（带 msg）且不是
+        // 「还没扫」（TUYA_WAITING_MSG_RE——这个状态端点对未扫码的 token 回的
+        // 就是 error: "Login failed, please scan and try again!"，不区分会把
+        // 刚生成的二维码误报成「已失效」）。另两种——waiting 答复、网关 5xx 的
+        // 无 msg 失败——都当 pending 在预算内继续等；等满预算交还 pending，
+        // 页面自己还有二维码有效期的兜底，会一直问到过期或扫到为止。
+        const upstreamSaid = str(record.msg)
+        const isWaitingReply = upstreamSaid !== null && TUYA_WAITING_MSG_RE.test(upstreamSaid)
+        const isGatewayFailure = upstreamSaid === null
+        if (!isWaitingReply && !isGatewayFailure) {
+          const detail = toolFailure(payload, '二维码已失效')
+          return { status: 'error', uid: null, timedOut: false, message: detail }
+        }
+        if (Date.now() >= deadline) return { status: 'pending', uid: null, timedOut: true }
+        await new Promise((resolve) => setTimeout(resolve, TUYA_STATUS_POLL_INTERVAL_MS))
+        continue
       }
       if (Date.now() >= deadline) return { status: 'pending', uid: str(record.uid), timedOut: true }
       await new Promise((resolve) => setTimeout(resolve, TUYA_STATUS_POLL_INTERVAL_MS))
@@ -329,9 +343,10 @@ export class PlatformAuth {
     const url = str(record.url)
     if (url === null) throw new PlatformAuthError(`上游没有返回授权地址：${toolFailure(payload, '未知原因')}`, 502)
     this.log.info(`已生成米家授权地址（区域 ${str(record.region) ?? region ?? '沿用当前'}）`)
-    // The child's redirect_uri is `https://127.0.0.1`: the browser cannot load
-    // it, so tell the user up front that the address bar is the payload.
-    return { url, region: str(record.region) ?? region, redirectUri: 'https://127.0.0.1' }
+    // v1.2.21 起授权 URL 的 redirect_uri 指向后台服务自身的 /auth/browser-callback：
+    // 用户在浏览器登录后由本机服务自动完成 code 交换，设置页轮询状态即可，
+    // 不再需要把打不开的 https://127.0.0.1/?code=… 地址栏粘回来。
+    return { url, region: str(record.region) ?? region, autoCallback: record.auto_callback === true }
   }
 
   /** Step 2: exchange whatever the user pasted for a token. */
@@ -434,8 +449,13 @@ export class PlatformAuth {
       case 'huawei':
         if (!has('auth/huawei_logout')) throw new PlatformAuthError('当前上游构建没有华为退出工具（auth/huawei_logout，需 v1.2.20 及以上）', 501)
         return { message: str(asRecord(await this.call('auth/huawei_logout')).message) ?? '华为已退出' }
-      case 'xiaomi':
-        throw new PlatformAuthError('上游没有暴露米家退出登录的接口（provider 里有 logout()，但既没有 MCP 工具也没有 REST 路由）。需要退出米家请等上游补上，或更换 data/ 目录下的米家 token 后重启服务。', 501)
+      case 'xiaomi': {
+        const result = await this.child.xiaomiLogout()
+        if (result === null) {
+          throw new PlatformAuthError('当前后台服务没有米家退出接口（/api/v1/platform/xiaomi/logout，需 v1.2.21 及以上），请先在「服务 › 升级与版本」升级后台服务', 501)
+        }
+        return { message: str(result.message) ?? '米家已退出' }
+      }
       default:
         throw new PlatformAuthError(`未知平台 ${platformId}`, 404)
     }

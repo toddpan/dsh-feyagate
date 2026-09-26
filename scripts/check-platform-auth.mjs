@@ -125,7 +125,7 @@ async function main() {
       case 'auth/ewelink_login':
         return toolReply(args.password === SECRET ? { success: true, device_count: 3, auth_status: {} } : { success: false, device_count: 0, auth_status: {} })
       case 'xiaomi/auth_url':
-        return toolReply({ url: `https://account.xiaomi.com/oauth2/authorize?region=${args.region ?? 'cn'}`, region: args.region ?? 'cn' })
+        return toolReply({ url: `https://account.xiaomi.com/oauth2/authorize?region=${args.region ?? 'cn'}`, region: args.region ?? 'cn', redirect_uri: 'http://127.0.0.1:38080/auth/browser-callback', auto_callback: true })
       case 'xiaomi/auth_callback':
         seen.callbackCode = args.code
         return toolReply(args.code === 'THE-REAL-CODE' ? { success: true, message: 'Authorization successful', region: args.region ?? 'cn' } : { success: false, error: 'Authorization failed' })
@@ -144,6 +144,9 @@ async function main() {
         const text = JSON.stringify(payload)
         res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) })
         res.end(text)
+      }
+      if (url.pathname === '/api/v1/platform/xiaomi/logout') {
+        return json({ code: 0, data: { success: true, message: '米家已退出' } })
       }
       if (url.pathname === '/mcp/http') {
         const message = JSON.parse(body)
@@ -270,6 +273,7 @@ async function main() {
     console.log('\n== 米家：两步 OAuth ==')
     const url = await post('/auth/xiaomi/url', { region: 'sg' })
     check('返回授权地址', url.status === 200 && String(url.payload?.data?.url).startsWith('https://account.xiaomi.com/'))
+    check('授权地址带自动回调标记（redirect_uri 指向本机 browser-callback）', url.payload?.data?.autoCallback === true)
     const urlBadRegion = await post('/auth/xiaomi/url', { region: 'mars' })
     check('未知区域被挡下（子进程会照单全收）', urlBadRegion.status === 400 && String(urlBadRegion.payload?.error).includes('未知的小米区域'))
 
@@ -326,9 +330,9 @@ async function main() {
     }
     const xiaomiOut = await post('/auth/logout', { platform: 'xiaomi' })
     check(
-      '米家退出如实说「上游没有这个接口」（501，而不是假装成功）',
-      xiaomiOut.status === 501 && String(xiaomiOut.payload?.error).includes('上游没有暴露米家退出登录的接口'),
-      `${xiaomiOut.status}`,
+      '米家退出登录成功（走后台服务 REST /api/v1/platform/xiaomi/logout）',
+      xiaomiOut.status === 200 && String(xiaomiOut.payload?.data?.message ?? xiaomiOut.payload?.data).includes('米家已退出'),
+      `${xiaomiOut.status} ${xiaomiOut.text.slice(0, 60)}`,
     )
     const unknownOut = await post('/auth/logout', { platform: 'nope' })
     check('未知平台返回 404（并提示缺参数）', unknownOut.status === 404 && (await post('/auth/logout', {})).status === 400)

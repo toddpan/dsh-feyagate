@@ -29,6 +29,7 @@ import { type LogBuffer } from './log.js'
 import { loadManifest, latestVersionForPlatform, resolveAsset, isVersionUsable } from './manifest.js'
 import { buildDownloadPlans } from './download/sources.js'
 import { installBinary } from './download/index.js'
+import { verifyMachODeps } from './download/mach-deps.js'
 import { binaryName } from './util/platform.js'
 import { listInstalledVersions, versionDir } from './paths.js'
 import { readSettings } from './settings.js'
@@ -237,6 +238,15 @@ export class InstallService {
           log: { info: (message) => this.log.info(message), warn: (message) => this.log.warn(message), error: (message) => this.log.error(message) },
         })
         this.log.info(`v${version} 已就位（来源：${result.usedPlan.label}，sha256 ${result.sha256 ?? '未校验'}）`)
+
+        // 切版本之前的静态预检：主程序声明的随包动态库必须真的在包里。上游
+        // v1.2.20 的 mac-arm64 zip 缺了 9 个动态库里的 8 个，dyld 在健康检查
+        // 之前就 SIGABRT，报错完全不知所云——这里把同类事故变成一句人话，
+        // 并且走安装失败路径，正在运行的旧版本不受影响。
+        const depsCheck = await verifyMachODeps(versionDir(this.root, version), binaryName(this.platform), this.platform, this.log)
+        if (depsCheck.checked > 0) {
+          this.log.info(`动态库依赖预检通过（${depsCheck.checked} 项声明全部在包内）`)
+        }
 
         context.phase('activating', `正在切换到 v${version}`)
         // The version being replaced stays reachable as the rollback target.

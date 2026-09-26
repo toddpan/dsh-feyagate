@@ -44,6 +44,7 @@ import { DEFAULT_FACADE_PORT, PORT_SCAN_RANGE, TUYA_STATUS_LONG_POLL_MS, TUYA_ST
 import {
   TUYA_QR_STATUS_TOOL_NOTE,
   TUYA_QR_TOOL_NOTE,
+  TUYA_WAITING_MSG_RE,
   isTuyaToken,
   tuyaQrChatDisplay,
   tuyaQrImagePath,
@@ -68,6 +69,14 @@ const SSE_KEEPALIVE_MS = 15_000
 
 /** Retry interval for a `list_changed` that found no open stream to deliver to. */
 const LIST_CHANGED_RETRY_MS = 5_000
+
+/**
+ * 涂鸦网关（apigw.iotbing.com）会间歇 5xx：一次 `auth/tuya_qr_status` 可能正好
+ * 撞上。长轮询里给这类网关层失败（上游没有带任何说明的 error）最多 3 次重试，
+ * 一条好好的扫码就不会被一次 502 打断；真正的终态（token 无效，上游带 msg）照旧
+ * 立即返回。
+ */
+const TUYA_GATEWAY_RETRIES = 3
 
 /** Bound on retry attempts; gives the bridge roughly a minute to open its stream. */
 const LIST_CHANGED_MAX_RETRIES = 12
@@ -311,6 +320,40 @@ function tuyaStatusOf(responseBody: string): string | null {
   if (parsed === null) return null
   const status = parsed.payload.status
   return typeof status === 'string' ? status : null
+}
+
+/**
+ * 网关层失败：子服务回 error，但上游没有给出任何说明（无 `msg`）——涂鸦的
+ * 网关 5xx 就是这个形状。带 `msg` 的 error 是涂鸦的明确答复，不属于这类。
+ */
+function tuyaErrorIsGatewayLevel(responseBody: string): boolean {
+  const parsed = parseToolPayload(responseBody)
+  if (parsed === null) return false
+  return parsed.payload.status === 'error' && parsed.payload.msg === undefined && parsed.payload.message === undefined
+}
+
+/**
+ * 「还没扫」的 waiting 答复：涂鸦 apigw 对未扫码的 token 回的不是 pending，
+ * 而是 `status:"error"` + `msg:"Login failed, please scan and try again!"`。
+ * 不识别它，二维码就会在生成几秒后被当成「已失效」。
+ */
+function tuyaStatusIsWaitingReply(responseBody: string): boolean {
+  const parsed = parseToolPayload(responseBody)
+  if (parsed === null) return false
+  return parsed.payload.status === 'error' && typeof parsed.payload.msg === 'string' && TUYA_WAITING_MSG_RE.test(parsed.payload.msg)
+}
+
+/** 把 waiting 答复改写成一行干净的 `pending`，模型按工具说明继续轮询。 */
+function rewriteTuyaWaitingToPending(responseBody: string): string {
+  const parsed = parseToolPayload(responseBody)
+  if (parsed === null) return responseBody
+  if (!(parsed.payload.status === 'error' && typeof parsed.payload.msg === 'string' && TUYA_WAITING_MSG_RE.test(parsed.payload.msg))) {
+    return responseBody
+  }
+  const pendingPayload: Record<string, unknown> = { ...parsed.payload, status: 'pending', success: true }
+  delete pendingPayload.msg
+  parsed.content.text = JSON.stringify(pendingPayload)
+  return JSON.stringify(parsed.message)
 }
 
 /** What to tell the model about an upstream Tuya status answer. */
@@ -639,7 +682,17 @@ export class McpFacade {
   ): Promise<{ status: number; body: string; contentType: string }> {
     let current = first
     const deadline = Date.now() + TUYA_STATUS_LONG_POLL_MS
-    while (tuyaStatusOf(current.body) === 'pending' && Date.now() < deadline) {
+    let gatewayRetries = 0
+    while (Date.now() < deadline) {
+      const verdict = tuyaStatusOf(current.body)
+      if (verdict === 'pending' || tuyaStatusIsWaitingReply(current.body)) {
+        // 还没扫（涂鸦把未扫码回成 waiting error，见 TUYA_WAITING_MSG_RE）：继续等。
+      } else if (verdict === 'error' && gatewayRetries < TUYA_GATEWAY_RETRIES && tuyaErrorIsGatewayLevel(current.body)) {
+        gatewayRetries += 1
+      } else {
+        // authorized，或涂鸦给出了明确答复（error 且带非等待类 msg），或网关重试已用尽。
+        return current
+      }
       await new Promise((resolve) => setTimeout(resolve, TUYA_STATUS_POLL_INTERVAL_MS))
       const next = await this.proxy(port, body)
       // Child died mid-wait: the last good answer (a valid `pending`) beats an
@@ -647,7 +700,10 @@ export class McpFacade {
       if (next === null) return current
       current = next
     }
-    return current
+    // 等满预算仍是「还没扫」：改写成干净的 pending 还给模型——模型按工具说明
+    // 继续轮询直到扫到或自行重新生成，而不是把一条等待答复当成失败。
+    const rewritten = rewriteTuyaWaitingToPending(current.body)
+    return rewritten === current.body ? current : { ...current, body: rewritten }
   }
 
   /**

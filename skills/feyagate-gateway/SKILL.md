@@ -5,16 +5,16 @@ version: 0.3.0
 metadata:
   dsh:
     mcpServerName: feyagate
-    toolCount: 76
+    toolCount: 93
     requires:
       service: 本机后台服务 miloco-mcp-server（由 dsh-feyagate-gateway 插件托管，落盘 ~/.dsh/dsh-feyagate）
     references:
-      # 后台服务自己的完整 API 文档（76 个工具的逐个 schema 都在这里）。
+      # 后台服务自己的完整 API 文档（全部工具的逐个 schema 都在这里）。
       # 它不在本 npm 包里，在上游仓库：app/feyagate-skill-gh/FeyaGate_MCP_API.md
       - FeyaGate_MCP_API.md
 ---
 
-> **这个文件解决什么问题**：教模型**正确地**用这 76 个智能家居工具 —— 什么时候用、参数名怎么拼（有一处 camelCase / snake_case 陷阱）、按什么顺序调用、四种常见错误怎么救。**不含**逐个工具的 schema。
+> **这个文件解决什么问题**：教模型**正确地**用这些智能家居工具 —— 什么时候用、参数名怎么拼（统一 snake_case，与物理网关一致）、按什么顺序调用、常见错误怎么救。**不含**逐个工具的 schema。
 
 # FeyaGate 智能家居工具
 
@@ -28,14 +28,14 @@ metadata:
 
 | 用户想做的事 | 用哪类工具 | 代表工具 |
 |---|---|---|
-| 开/关/调节设备（灯、空调、窗帘、插座…） | 通用设备 + 平台控制 | `device/list`、`device/specs`、`set_*_device_property`、`execute_xiaomi_device_action` |
-| 读设备当前状态 | 平台读工具 | `get_*_device_properties` |
+| 开/关/调节设备（灯、空调、窗帘、插座…） | 通用设备 + 平台控制 | `device/list`、`device/specs`、`<平台>/set_property`、`<平台>/execute_action` |
+| 读设备当前状态 | 平台读工具 | `<平台>/get_properties` |
 | 看摄像头 / 抓拍 | 小米摄像头 | `xiaomi/camera_list`、`xiaomi/camera_connect`、`xiaomi/camera_snapshot` |
 | 就着画面回答问题（视觉） | Vision AI | `xiaomi/camera_vision_chat`（需要授权版 + 配好 Vision） |
-| 触发场景 | 小米场景 | `xiaomi/scene_list`、`xiaomi/scene_trigger` |
+| 触发场景 | 场景 | `scene/list`、`scene/trigger`（带 platform 参数） |
 | 定时任务（"每天 22 点关灯"） | 定时 | `schedule/add`、`schedule/list`、`schedule/update`、`schedule/delete` |
 | 让画面自动触发动作 | 触发规则 | `trigger/create`、`trigger/update`、`trigger/toggle`、`trigger/logs` |
-| 长期记忆 | 记忆（走技能/记忆工具） | `skill/context`、`skill/list` |
+| 长期记忆 | 记忆 | `memory/read`、`memory/search`、`memory/append` |
 | 技能包管理 | 技能 | `skill/list`、`skill/read`、`skill/create`、`skill/delete`、`skill/reload` |
 | 授权与试用状态 | 授权查询 | `license/status`（写授权码用 `license/set`，清除用 `license/clear`） |
 | 平台登录 / 退出 | 平台认证 | `xiaomi/auth_url` + `xiaomi/auth_callback`、`auth/tuya_qr`（见下方「涂鸦授权」）、`auth/midea_login`、`auth/ewelink_login` |
@@ -43,25 +43,25 @@ metadata:
 | 小智终端接入 | 小智 | `xiaozhi/list`、`xiaozhi/add`、`xiaozhi/remove` |
 | 统计与用量 | 统计 | `stats/dashboard`、`stats/token_usage`、`stats/trigger_summary` |
 
-## ⚠️ 参数命名陷阱（最容易出错的一条）
+## ⚠️ 参数命名约定（与物理网关一致）
 
-- **设备控制类**工具一律用 **camelCase `deviceId`**：`device/specs`、`get_*_device_properties`、`set_*_device_property`、`execute_*_action`。
-- **只有 `xiaoai/*`**（`tts` / `control` / `play_music`）用 **snake_case `device_id`**。
-- 摄像头工具用的是 **`camera_id`**（snake_case），不是 `deviceId`。
-- 平台专属参数也用 camelCase：`siid`、`piid`、`piids`、`aiid`、`code`、`property`。
+- **所有设备控制类工具的参数一律用 snake_case `device_id`**：`device/specs`、`xiaomi/get_properties`、`xiaomi/set_property`、`xiaomi/execute_action`、`tuya/get_properties`、`tuya/set_property`、`midea/*`、`ewelink/*`、`huawei/*`。
+- `xiaoai/*`（`tts` / `control` / `play_music`）同样用 `device_id`；摄像头工具用 `camera_id`。
+- 平台专属参数：小米 `siid` / `piid` / `piids` / `aiid`；涂鸦 `code`；美的/易微联/华为 `property`；华为服务 `sid`。
+- 小米的 `siid`/`piid` 等标量参数传字符串或数字都可以（服务端两种都接受）。
 
 写错参数名的表现是 `-32602`（参数错误）或工具报缺参。
 
 ## 推荐调用顺序
 
 ```
-device/list                    ← 先看有什么设备（可用 platform / filter 过滤）
+device/list                          ← 先看有什么设备（可用 platform / filter 过滤）
       ↓
-device/specs {deviceId}        ← 拿这台设备的平台、可用属性与动作
+device/specs {device_id}             ← 拿这台设备的平台、可用属性与动作
       ↓
-识别平台（xiaomi / tuya / midea / ewelink / …）
+识别平台（xiaomi / tuya / midea / ewelink / huawei）
       ↓
-按平台调用：get_*_device_properties 读 → set_*_device_property 写
+按平台调用：<平台>/get_properties 读 → <平台>/set_property 写
       ↓
 （可选）按平台参考做法：涂鸦用 DP code、小米用 siid/piid、美的用 property 名
 ```
@@ -71,9 +71,9 @@ device/specs {deviceId}        ← 拿这台设备的平台、可用属性与动
 典型流程（开客厅灯）：
 
 ```
-device/list {filter: ["客厅", "灯"]}        → 拿到 deviceId
-device/specs {deviceId}                     → 确认平台是 xiaomi、属性 piid
-set_xiaomi_device_property {deviceId, siid: 2, piid: 1, value: true}
+device/list {filter: ["客厅", "灯"]}          → 拿到 deviceId / id
+device/specs {device_id}                      → 确认平台是 xiaomi、属性 piid
+xiaomi/set_property {device_id, siid: 2, piid: 1, value: true}
 ```
 
 ## 常见错误与应对
@@ -82,7 +82,7 @@ set_xiaomi_device_property {deviceId, siid: 2, piid: 1, value: true}
 |---|---|---|
 ## 先告诉用户：设置界面里可以点着登录
 
-五家平台（米家 / 涂鸦 / 美的 / 易微联 / 华为）的登录**都能在设置页完成**：`设置 › 插件 › 飞阳网关 › 平台登录`，每家一张卡片（涂鸦直接显示二维码、米家是"拿授权地址 → 粘回回调地址"、美的/易微联是账号口令、华为是两步验证码）。
+五家平台（米家 / 涂鸦 / 美的 / 易微联 / 华为）的登录**都能在设置页完成**：`设置 › 插件 › 飞阳网关 › 平台登录`，每家一张卡片（涂鸦直接显示二维码、米家是"拿授权地址 → 登录后把跳转页地址栏整段粘回来"、美的/易微联是账号口令、华为是两步验证码）。
 
 所以当用户只是想**把账号登进去**：
 
@@ -123,7 +123,9 @@ set_xiaomi_device_property {deviceId, siid: 2, piid: 1, value: true}
 
 ## 不要做的事
 
+- **控制/查询设备必须走 MCP 工具**（`mcp__feyagate__*`），**禁止**用 HTTP 请求、curl 或 REST 接口（如 `127.0.0.1:38080/api/v1/*`）操作设备 —— 那是 WebUI 内部接口，绕过 MCP 会失去授权拦截和统一行为。全流程：`device/list` → `device/specs` → `<平台>/get|set_property`。
+- `device/list` 的在线状态由 MQTT 实时维护、每 5 分钟与云端对账；若用户坚称设备在线而列表显示 offline，先用平台读工具（如 `xiaomi/get_properties`）复核，不要直接下"设备离线"的结论。
 - **优先让用户在界面里登录**，不要在聊天里索要或复述账号密码。注意 `auth/midea_login`（`account`/`password`）与 `auth/ewelink_login`（`email`/`password`）**确实是接受密码参数的工具** —— 只有用户明确要求你代为登录时才调用，且调用后不要在回复里回显密码。华为登录/验证码**不下发**为 MCP 工具，只能由用户在界面完成。
 - **不要**在写操作失败时反复重试 —— 绝大多数写失败是"许可证不足"或"设备离线"，重试只会刷屏。
-- **不要**在这里找 76 个工具的完整 schema：那在后台服务自己的 API 文档 `FeyaGate_MCP_API.md`（上游仓库 `app/feyagate-skill-gh/FeyaGate_MCP_API.md`，**不随本插件分发**）。本文件只讲调用姿势与陷阱。
+- **不要**在这里找全部工具的完整 schema：那在后台服务自己的 API 文档 `FeyaGate_MCP_API.md`（上游仓库 `app/feyagate-skill-gh/FeyaGate_MCP_API.md`，**不随本插件分发**）。本文件只讲调用姿势与陷阱。
 - **不要**假设工具名不变：公开名由桥规范化，改动前后以 `tools/list` 为准。

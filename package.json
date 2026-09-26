@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-feyagate-gateway",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "FeyaGate 网关 × DSH —— 在 DSH 里托管本机 miloco-mcp-server，并提供服务/授权/账号的可视化设置界面",
   "private": false,
   "repository": {

@@ -51,6 +51,15 @@ function boot(): BootGlobal {
 
 const API_PREFIX = boot().apiPrefix ?? FALLBACK_PREFIX
 
+/**
+ * 服务端字段里存的是带前缀的根相对路径（如 `/dsh-feyagate/auth/tuya/qr.png`）；
+ * 直接再拼一遍前缀会变成 `/dsh-feyagate/dsh-feyagate/…`（接口 404）。统一走这里
+ * 补齐：已带前缀的原样返回，没带的补上。
+ */
+function withApiPrefix(path: string): string {
+  return path.startsWith(API_PREFIX) ? path : `${API_PREFIX}${path}`
+}
+
 const TABS = [
   { id: 'service', label: '服务' },
   { id: 'license', label: '授权' },
@@ -1006,9 +1015,31 @@ function XiaomiLogin(props: {
   // 发起授权时的区域要沿用给回调：上游 callback 的 region 会覆盖当前区域，
   // 两步之间用户改了下拉框就会导致"看不到设备"（桌面端也用 regionRef 这么做）。
   const [urlRegion, setUrlRegion] = useState('cn')
+  const [auto, setAuto] = useState(false)
+  const [showFallback, setShowFallback] = useState(false)
   const [pasted, setPasted] = useState('')
   const [done, setDone] = useState<string | null>(null)
   const action = useAction(props.reload)
+  const authenticated = props.account?.authenticated === true
+  // 保持 reload 最新引用，轮询定时器里用 ref 取，避免闭包过期
+  const reloadRef = useRef(props.reload)
+  reloadRef.current = props.reload
+
+  // 自动回调模式（v1.2.21+）：授权 URL 的 redirect_uri 指向后台服务自身，
+  // 用户在浏览器登录完成后本机服务自动完成 code 交换 —— 这里只负责发现
+  // 登录状态翻转，等价于 Android 端"拦截回调自动授权"的体验。
+  useEffect(() => {
+    if (url === null) return
+    if (authenticated) {
+      setDone(`授权成功（区域 ${urlRegion}）`)
+      setUrl(null)
+      setShowFallback(false)
+      setPasted('')
+      return
+    }
+    const timer = setInterval(() => reloadRef.current(), 2500)
+    return () => clearInterval(timer)
+  }, [url, authenticated, urlRegion])
 
   return (
     <PlatformCard
@@ -1017,8 +1048,9 @@ function XiaomiLogin(props: {
       unavailable={hasUrl ? null : '当前上游构建没有米家授权工具（xiaomi/auth_url、xiaomi/auth_callback）。'}
     >
       <div className="fg-hint">
-        两步：先拿授权地址，在浏览器里登录；登录后浏览器会跳到 <code className="fg-code">https://127.0.0.1/?code=…</code>，
-        <strong>页面打不开是正常的</strong> —— code 只在地址栏里。把地址栏整段粘回来即可。
+        {auto === true
+          ? '三步：选区域 → 获取授权地址 → 在浏览器里登录。登录成功后浏览器会自动跳回本机服务完成授权（页面显示"授权成功"），无需粘贴任何地址 —— 本页会自动检测并更新登录状态。'
+          : '三步：选区域 → 获取授权地址 → 在浏览器里登录并确认授权。登录完成后浏览器会跳到一个打不开的页面（https://127.0.0.1/?code=…），这是正常的 —— 授权码只在该页面的地址栏里；把地址栏整段复制下来，粘贴到下方"粘贴回调地址"输入框，点"完成授权"即可。'}
       </div>
       <div className="fg-form-2">
         <Select
@@ -1042,9 +1074,10 @@ function XiaomiLogin(props: {
           disabled={action.busy !== null}
           onClick={() =>
             action.run('xiaomi-url', async () => {
-              const result = await post<{ url: string }>('/auth/xiaomi/url', { region })
+              const result = await post<{ url: string; autoCallback?: boolean }>('/auth/xiaomi/url', { region })
               setUrl(result.url)
               setUrlRegion(region)
+              setAuto(result.autoCallback === true)
               setDone(null)
             })
           }
@@ -1060,28 +1093,42 @@ function XiaomiLogin(props: {
             </a>
             <Copy value={url} label="复制地址" />
           </div>
-          <Field
-            label="粘贴回调地址（或只粘 code）"
-            value={pasted}
-            onChange={setPasted}
-            placeholder="https://127.0.0.1/?code=…"
-          />
-          <div className="fg-actions">
-            <Btn
-              variant="primary"
-              disabled={action.busy !== null || pasted.trim() === ''}
-              onClick={() =>
-                action.run('xiaomi-callback', async () => {
-                  const result = await post<{ region: string | null }>('/auth/xiaomi/callback', { input: pasted, region: urlRegion })
-                  setDone(result.region === null ? '授权成功' : `授权成功（区域 ${result.region}）`)
-                  setUrl(null)
-                  setPasted('')
-                })
-              }
-            >
-              {action.busy === null ? '完成授权' : '正在交换令牌…'}
-            </Btn>
-          </div>
+          {auto ? (
+            <div className="fg-hint">
+              等待登录结果…（登录完成后浏览器会跳到 <code className="fg-code">授权成功</code> 页面，本页自动更新状态）
+            </div>
+          ) : null}
+          {auto && !showFallback ? (
+            <div className="fg-hint">
+              自动授权没有反应？<a className="fg-link" onClick={() => setShowFallback(true)}>手动粘贴回调地址</a>
+            </div>
+          ) : null}
+          {(!auto || showFallback) ? (
+            <div>
+              <Field
+                label="粘贴回调地址（或只粘 code）"
+                value={pasted}
+                onChange={setPasted}
+                placeholder="https://127.0.0.1/?code=…"
+              />
+              <div className="fg-actions">
+                <Btn
+                  variant="primary"
+                  disabled={action.busy !== null || pasted.trim() === ''}
+                  onClick={() =>
+                    action.run('xiaomi-callback', async () => {
+                      const result = await post<{ region: string | null }>('/auth/xiaomi/callback', { input: pasted, region: urlRegion })
+                      setDone(result.region === null ? '授权成功' : `授权成功（区域 ${result.region}）`)
+                      setUrl(null)
+                      setPasted('')
+                    })
+                  }
+                >
+                  {action.busy === null ? '完成授权' : '正在交换令牌…'}
+                </Btn>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
       {done === null ? null : (
@@ -1090,10 +1137,7 @@ function XiaomiLogin(props: {
         </div>
       )}
       {action.error === null ? null : <ErrorCard raw={action.error} onDismiss={action.clearError} />}
-      <div className="fg-hint">
-        退出登录：上游没有暴露米家退出接口（provider 里有 <code className="fg-code">logout()</code>，但既没有 MCP 工具也没有 REST 路由），
-        所以这里不提供 —— 需要退出只能等上游补上。
-      </div>
+      <LogoutButton platformId="xiaomi" onDone={props.reload} available={authenticated} reason="登录后才能退出" />
     </PlatformCard>
   )
 }
@@ -1110,10 +1154,14 @@ function TuyaLogin(props: {
   const [generatedAt, setGeneratedAt] = useState(0)
   const [scan, setScan] = useState<'idle' | 'waiting' | 'authorized' | 'error'>('idle')
   const [detail, setDetail] = useState<string | null>(null)
+  /** 非终态的等待说明（网络抖动等）：页面继续轮询，不把失败标签甩给用户。 */
+  const [transient, setTransient] = useState<string | null>(null)
   const action = useAction(props.reload)
 
   // 扫码等待放在服务端（单次最多 35 秒），这里只管循环再问一次：
   // 用户扫得快就即时返回，扫得慢也不会把页面变成一堆失败请求。
+  // 单次请求失败（网络抖动、dsh 重启瞬间）同样只算等待中的插曲：
+  // 在二维码有效期内继续问，终态失败只留给「已过期」。
   useEffect(() => {
     if (ticket === null || scan !== 'waiting') return
     let cancelled = false
@@ -1140,11 +1188,10 @@ function TuyaLogin(props: {
             return
           }
         } catch (cause) {
-          if (!cancelled) {
-            setScan('error')
-            setDetail((cause as Error).message)
-          }
-          return
+          if (cancelled) return
+          setTransient(`请求没有成功（${(cause as Error).message}），自动重试中…`)
+          await new Promise((resolve) => setTimeout(resolve, 2000))
+          continue
         }
       }
     }
@@ -1154,7 +1201,7 @@ function TuyaLogin(props: {
     }
   }, [ticket, scan, userCode, generatedAt, reload])
 
-  const qrSrc = ticket === null ? null : ticket.imageUrl.startsWith(API_PREFIX) ? ticket.imageUrl : `${API_PREFIX}${ticket.imageUrl}`
+  const qrSrc = ticket === null ? null : withApiPrefix(ticket.imageUrl)
 
   return (
     <PlatformCard
@@ -1178,6 +1225,7 @@ function TuyaLogin(props: {
               setGeneratedAt(Date.now())
               setScan('waiting')
               setDetail(null)
+              setTransient(null)
             })
           }
         >
@@ -1192,15 +1240,23 @@ function TuyaLogin(props: {
             二维码 {ticket.expireSeconds} 秒内有效。
             {scan === 'waiting' ? '正在等你扫码（会一直等到扫到为止，页面不用管）。' : null}
             {scan === 'authorized' ? ' 已扫码确认。' : null}
-            <a className="fg-link" href={`${API_PREFIX}${ticket.textUrl}`} target="_blank" rel="noreferrer">
+            <a className="fg-link" href={withApiPrefix(ticket.textUrl)} target="_blank" rel="noreferrer">
               图片显示不出来？用文本二维码
             </a>
           </div>
         </div>
       )}
-      {detail === null ? null : (
+      {detail === null && transient === null ? null : (
         <div className="fg-hint">
-          <span className={`fg-tag ${scan === 'authorized' ? 'fg-tag-ok' : 'fg-tag-bad'}`}>{scan === 'authorized' ? '成功' : '失败'}</span> {detail}
+          {transient !== null ? (
+            <>
+              <span className="fg-tag">重试</span> {transient}
+            </>
+          ) : (
+            <>
+              <span className={`fg-tag ${scan === 'authorized' ? 'fg-tag-ok' : 'fg-tag-bad'}`}>{scan === 'authorized' ? '成功' : '失败'}</span> {detail}
+            </>
+          )}
         </div>
       )}
       <LogoutButton

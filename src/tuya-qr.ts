@@ -21,6 +21,13 @@
 /** The payload prefix the Tuya Smart app accepts for QR login. */
 export const TUYA_QR_PREFIX = 'tuyaSmart--qrLogin/?token='
 
+/**
+ * 涂鸦 apigw 的「还没扫」答复不是 pending，而是一条 error：
+ * `msg="Login failed, please scan and try again!"`。谁把它直接当终态，谁的
+ * 二维码就会在生成几秒后显示「已失效」。按 msg 内容识别这条等待答复。
+ */
+export const TUYA_WAITING_MSG_RE = /scan\s*and\s*try\s*again/i
+
 /** Plugin API prefix; the routes below hang off it. */
 import { API_PREFIX } from './constants.js'
 

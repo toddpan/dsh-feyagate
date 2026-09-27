@@ -1,6 +1,6 @@
 {
   "manifestVersion": 1,
-  "generatedAt": "2026-09-26T15:17:39.821Z",
+  "generatedAt": "2026-09-27T03:59:56.205Z",
   "server": {
     "name": "miloco-mcp-server",
     "repo": "https://github.com/toddpan/miloco-mcp-server-releases",
@@ -40,16 +40,16 @@
           {
             "file": "miloco-mcp-server-mac-arm64-v1.2.21.zip",
             "kind": "zip",
-            "size": 25165831,
+            "size": 25278415,
             "url": "https://github.com/toddpan/miloco-mcp-server-releases/releases/download/v1.2.21/miloco-mcp-server-mac-arm64-v1.2.21.zip",
-            "sha256": "17eab25dd94e694871b9d51e54973aaf271095655074833f64bb7a347c49c5bc"
+            "sha256": "20b92f6de2270548e837640562eaa87de42bf52e9bbd8340142a0b469644ffc8"
           },
           {
             "file": "miloco-mcp-server-mac-arm64-v1.2.21.tar.gz",
             "kind": "tar.gz",
-            "size": 18287512,
+            "size": 18366815,
             "url": "https://github.com/toddpan/miloco-mcp-server-releases/releases/download/v1.2.21/miloco-mcp-server-mac-arm64-v1.2.21.tar.gz",
-            "sha256": "f4d39684a7bad61cbd08b7e54fe550584aba0cb7701743ac34a846974c13484a"
+            "sha256": "c11cec3868db64a59ef68b293d442df7012a1bb859c8c7feba97b3de5293b799"
           }
         ]
       }

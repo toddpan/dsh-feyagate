@@ -14,24 +14,54 @@
  *   * answers `initialize` immediately, always, so the connection never fails;
  *   * answers `tools/list` with an empty list while the child is absent, which
  *     is a *valid* MCP answer and therefore does not consume any retry budget;
- *   * proxies everything to the child verbatim as soon as it is healthy,
- *     keeping the official bridge's tool naming, timeouts, and result
- *     projection (`mcp__feyagate__<rawName>`) exactly as upstream ships them;
+ *   * proxies the child's traffic as soon as it is healthy, keeping the official
+ *     bridge's tool naming, timeouts, and result projection
+ *     (`mcp__feyagate__<rawName>`) exactly as upstream ships them, and touching
+ *     exactly two responses: `tools/list` (`repairToolsList`) and the handshake
+ *     (`repairHandshake` — `initialize` *and* `server/discover`, below);
  *   * pushes `notifications/tools/list_changed` over the GET event stream when
  *     the child appears, so the tool list fills in without a host restart.
  *
- * Delivery is *eventual*, not fire-and-forget. The bridge's Streamable HTTP
- * transport opens its GET stream exactly once and only reacts to
- * `list_changed`; it never re-lists on its own. The child's health edge and
- * the stream's establishment are two independent timelines, and either can
- * miss the other, so the facade reconciles: a stream that opens while the
- * child is already healthy is sent an immediate `list_changed`, and a change
- * notified while no stream is open is marked pending and replayed (bounded,
- * every five seconds) until some stream receives it or the child goes down.
+ * A `list_changed` is only worth anything if the client installed a handler for
+ * it, and a client filters that on the capability the server advertised in the
+ * handshake: `@modelcontextprotocol/client@2.0.0` skips the handler *silently*
+ * when `capabilities.tools.listChanged` is missing ("Handlers are silently
+ * skipped if the server doesn't advertise the corresponding listChanged
+ * capability", `dist/index.mjs:3091`, gated at `:3095`) — and DSH's bridge does
+ * register one (`@deepseek-ai/dsh-mcp-client` `lib/index.js:602`, `onChanged →
+ * refreshTools`). Two handshake shapes can carry that capability, because the
+ * client negotiates the protocol era itself: `server/discover` first (the
+ * 2026-07-28 era, whose `capabilities` it *prefers* — `dist/index.mjs:3296`),
+ * then `initialize` on the legacy fallback. The child answers neither
+ * completely, so the facade must advertise the capability on **all three** of
+ * its paths: `localAnswer` synthesises it, and `repairHandshake` re-adds it to
+ * whichever handshake response the child produced — the child honestly reports
+ * `tools: {}` (it never changes its tool list at runtime) and forwarding that
+ * verbatim would silently delete the very capability the recovery below depends
+ * on. Remove any half and the recovery goes quiet while every log line still
+ * looks healthy.
+ *
+ * Delivery is *eventual*, not fire-and-forget — and a successful `write()` is
+ * **not** delivery. The client may not have installed its handler yet (the
+ * bridge opens its GET stream during the handshake), or the stream may belong
+ * to a superseded generation that drops the notification; neither is visible
+ * from the socket. The only trustworthy acknowledgement is the client's own
+ * `tools/list` coming back *with tools* — a re-list into an empty table is not
+ * an improvement, it is the state being repaired — so the facade re-sends on a
+ * bounded schedule (`armListChangedReplay`) until it sees that, which is what
+ * turns a swallowed notification from a permanent, silent failure into a
+ * recoverable one, and says so out loud when nothing ever acknowledges. The
+ * child's health edge and the stream's establishment are two independent
+ * timelines, so a stream that opens while the child is already healthy is
+ * reconciled immediately as well.
  *
  * Proxying the *raw* body rather than re-encoding each JSON-RPC message is
  * deliberate: batches, extra params, and future protocol revisions pass through
  * untouched, and the child stays the single source of truth for tool schemas.
+ * The two repairs above are the narrow exception, and they are one-field edits
+ * applied only when the request and answer have the shape we expect — a
+ * response the facade does not fully understand is forwarded byte-identical
+ * with a warning instead of being guessed at.
  *
  * The child's own port never appears here. It is read from the state store on
  * every request, which is what makes the port configurable without touching
@@ -143,6 +173,10 @@ function localAnswer(message: JsonRpcMessage, version: string, reason: string): 
   if (id === null) return null // a notification: nothing to answer
   switch (message.method) {
     case 'initialize':
+      // `tools.listChanged: true` is load-bearing, not decoration: the bridge
+      // only installs its `list_changed` handler when the server advertises it,
+      // and the recovery path for a late child depends on that handler existing.
+      // `repairHandshake` guarantees the same thing on the proxied path.
       return {
         jsonrpc: '2.0',
         id,
@@ -250,6 +284,77 @@ function repairToolsListResult(payload: unknown): number {
     }
   }
   return repaired
+}
+
+/**
+ * Advertise `tools.listChanged` in a proxied handshake result.
+ *
+ * `initialize` and `server/discover` are the two answers that can carry the
+ * capability, and which one matters depends on the era the client negotiated:
+ * for a 2026-07-28 server it reads `server/discover.capabilities`, and only on
+ * the legacy fallback does it read `initialize.capabilities`
+ * (`@modelcontextprotocol/client@2.0.0`, `dist/index.mjs:3296` vs `:3241`).
+ *
+ * The child is a plain MCP server whose tool list never changes at runtime, so
+ * it answers `capabilities: { resources: {}, tools: {} }` — honest, and correct
+ * for a client that talks to it directly. It is *wrong* for the bridge behind
+ * this facade: DSH's MCP client filters its `list_changed` handler on exactly
+ * that bit (`:3095`), so forwarding the child's answer verbatim deletes the
+ * capability the facade's whole eventual-delivery design rests on — the health
+ * edge below would push `notifications/tools/list_changed` into a client with
+ * no handler for it, and the session keeps whatever list it got at connect
+ * time, forever.
+ *
+ * This only ever *adds* `listChanged: true` to an existing `tools` object; it
+ * never invents a capability the child does not have, and never touches
+ * `resources`/`prompts` (the facade pushes no notifications for those). Matching
+ * is by *request id* rather than by response shape, which is what keeps a batch
+ * honest: a `tools/list` answer in the same batch has no `capabilities` at all,
+ * and judging it as a malformed handshake answer produced a false warning. The
+ * repaired and unexpected methods are returned so the caller can leave a
+ * response byte-identical when nothing changed, and can name the method when the
+ * shape is not what we expect.
+ */
+function repairHandshakeResult(
+  payload: unknown,
+  requests: Map<string | number, string>,
+): { repaired: string[]; unexpected: string[] } {
+  const messages = Array.isArray(payload) ? payload : [payload]
+  const repaired: string[] = []
+  const unexpected: string[] = []
+  for (const message of messages) {
+    if (message === null || typeof message !== 'object' || Array.isArray(message)) continue
+    const envelope = message as JsonRpcMessage
+    // An error answer, or a message that is not a response: nothing to repair.
+    if (envelope.error !== undefined || envelope.method !== undefined) continue
+    // Only the answers to the handshake requests we actually sent are
+    // candidates; anything else in the batch is none of this repair's business.
+    const id = envelope.id
+    if (typeof id !== 'string' && typeof id !== 'number') continue
+    const method = requests.get(id)
+    if (method === undefined) continue
+    const result = envelope.result
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+      unexpected.push(method)
+      continue
+    }
+    const capabilities = (result as { capabilities?: unknown }).capabilities
+    if (capabilities === null || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+      unexpected.push(method)
+      continue
+    }
+    const tools = (capabilities as { tools?: unknown }).tools
+    if (tools === null || typeof tools !== 'object' || Array.isArray(tools)) {
+      // No `tools` capability at all: do not invent one — that would claim a
+      // tool surface the child never offered.
+      unexpected.push(method)
+      continue
+    }
+    if ((tools as { listChanged?: unknown }).listChanged === true) continue
+    ;(tools as { listChanged?: unknown }).listChanged = true
+    repaired.push(method)
+  }
+  return { repaired, unexpected }
 }
 
 /** One `tools/call` found in a request body (single message or batch). */
@@ -384,6 +489,58 @@ function requestsToolsList(body: string): boolean {
   }
 }
 
+/**
+ * True when a `tools/list` response carries at least one tool.
+ *
+ * This is what makes the replay's acknowledgement honest: "the client asked"
+ * proves nothing (it always asks once at connect time, and the facade itself
+ * answers that with an empty list while the child is absent), while "the client
+ * asked and got tools" is exactly the state the pending notification exists to
+ * reach. Anything unparsable counts as no tools, i.e. keep retrying.
+ */
+function toolsListHasTools(body: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(body)
+    const messages = Array.isArray(parsed) ? parsed : [parsed]
+    for (const message of messages) {
+      if (message === null || typeof message !== 'object' || Array.isArray(message)) continue
+      const result = (message as JsonRpcMessage).result
+      if (result === null || typeof result !== 'object' || Array.isArray(result)) continue
+      const tools = (result as { tools?: unknown }).tools
+      if (Array.isArray(tools) && tools.length > 0) return true
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+/**
+ * The handshake requests in a body, keyed by JSON-RPC id → method.
+ *
+ * Both `initialize` (legacy era) and `server/discover` (2026-07-28 era) can be
+ * where the client reads the capabilities it gates the `list_changed` handler
+ * on, so both are candidates for the capability repair. Returning the ids (not
+ * just a boolean) is what lets the repair skip unrelated responses in a batch
+ * instead of reporting them as malformed handshake answers.
+ */
+function handshakeRequests(body: string): Map<string | number, string> {
+  const requests = new Map<string | number, string>()
+  try {
+    const parsed: unknown = JSON.parse(body)
+    const messages = Array.isArray(parsed) ? parsed : [parsed]
+    for (const message of messages) {
+      if (message === null || typeof message !== 'object' || Array.isArray(message)) continue
+      const { id, method } = message as JsonRpcMessage
+      if (method !== 'initialize' && method !== 'server/discover') continue
+      if (typeof id === 'string' || typeof id === 'number') requests.set(id, method)
+    }
+  } catch {
+    return requests
+  }
+  return requests
+}
+
 export class McpFacade {
   private readonly state: StateStore
   private readonly log: LogBuffer
@@ -397,9 +554,16 @@ export class McpFacade {
   private readonly streams = new Set<ServerResponse>()
   private keepalive: NodeJS.Timeout | null = null
   /**
-   * Set when a `list_changed` was raised but no stream was open to receive
-   * it. Cleared on the first successful delivery, on the next health edge,
-   * or when the bounded retry timer expires.
+   * Set while a `list_changed` still owes the client a re-list: every push arms
+   * this, and it is cleared only by the acknowledgement the facade actually
+   * trusts — a `tools/list` from the client that came back with at least one
+   * tool — or when the bounded replay budget is exhausted (which is reported,
+   * not swallowed). A successful `write()` alone does *not* clear it: the client
+   * may have no handler installed yet, or the stream may belong to a superseded
+   * generation, and neither is observable from the socket. An *empty* answer does
+   * not clear it either: a client that re-lists into nothing is exactly the
+   * client this replay still owes a tool list, so silencing it then would
+   * recreate the original silent failure in miniature.
    */
   private listChangedPending = false
   private listChangedRetries = 0
@@ -490,19 +654,28 @@ export class McpFacade {
    * Tell the connected client that the tool list changed.
    *
    * Called when the child transitions to healthy and when a stream opens
-   * while the child is already healthy. If no stream is open when the change
-   * happens, the notification is marked pending and replayed on a bounded
-   * retry interval until some stream receives it — the bridge never re-opens
-   * its GET stream or re-issues `tools/list` on its own, so a dropped
-   * one-shot notification would leave it on an empty tool list for the rest
-   * of the session.
+   * while the child is already healthy. The push is not considered done when
+   * the bytes are written: it stays pending until the client actually re-lists
+   * (`noteToolsListConfirmed`), and is re-sent on a bounded schedule meanwhile.
+   * The bridge never re-opens its GET stream or re-issues `tools/list` on its
+   * own, so a notification swallowed during the handshake — or by a superseded
+   * generation — would otherwise leave it on an empty tool list for the rest of
+   * the session, with no error anywhere to show for it.
    */
   notifyToolsChanged(): void {
-    if (this.deliverListChanged() > 0) {
-      this.log.info('已通知工具列表变化')
-      return
+    this.pushToolsChanged()
+  }
+
+  /** Start (or restart) a bounded push-and-verify cycle. */
+  private pushToolsChanged(): void {
+    this.listChangedPending = true
+    this.listChangedRetries = 0
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
     }
-    this.markListChangedPending()
+    this.deliverListChanged()
+    this.armListChangedReplay()
   }
 
   /** Write `list_changed` to every open stream. Returns how many received it. */
@@ -518,33 +691,64 @@ export class McpFacade {
       }
     }
     if (delivered > 0) {
-      this.clearListChangedPending()
       this.log.info(`已通知工具列表变化（${delivered} 个客户端流）`)
     }
     return delivered
   }
 
-  /** Remember a missed notification and arm the bounded retry timer. */
-  private markListChangedPending(): void {
-    this.listChangedPending = true
-    if (this.retryTimer !== null) return // a retry is already in flight
+  /**
+   * Arm the next verification tick of the current push.
+   *
+   * Each tick re-sends, and stops as soon as the client's own `tools/list`
+   * comes back with tools — so a notification that landed costs one tick and
+   * nothing else, while one that was swallowed is retried. Exhausting the budget
+   * is a *diagnosis*, not a dead end: it means the client saw the bytes and still
+   * never listed any tools, i.e. it has no `list_changed` handler installed (the
+   * capability was not advertised on the handshake it used) or the child is not
+   * answering, and either is worth saying out loud.
+   */
+  private armListChangedReplay(): void {
+    if (this.retryTimer !== null) return // a tick is already in flight
     if (this.listChangedRetries >= LIST_CHANGED_MAX_RETRIES) {
+      const streams = this.streams.size
       this.listChangedPending = false
       this.listChangedRetries = 0
-      this.log.warn('工具列表变化未送达（无客户端流，重试次数已用尽）')
+      this.log.warn(
+        streams > 0
+          ? `已重发 ${LIST_CHANGED_MAX_RETRIES} 次工具列表变化（含首次推送共 ${LIST_CHANGED_MAX_RETRIES + 1} 帧），但客户端始终没有列举出任何工具：请确认握手响应（initialize / server/discover）已广告 tools.listChanged、客户端装有 list_changed 处理器，以及后台服务是否在应答 tools/list`
+          : '工具列表变化未送达（无客户端流，重试次数已用尽）',
+      )
       return
     }
     this.listChangedRetries += 1
+    const attempt = this.listChangedRetries
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
       if (!this.listChangedPending) return
-      if (this.deliverListChanged() === 0) this.markListChangedPending()
+      if (this.streams.size > 0) this.deliverListChanged()
+      this.armListChangedReplay()
     }, LIST_CHANGED_RETRY_MS)
     this.retryTimer.unref?.()
-    this.log.info(`工具列表变化暂无客户端流，${LIST_CHANGED_RETRY_MS / 1000}s 后重试（第 ${this.listChangedRetries}/${LIST_CHANGED_MAX_RETRIES} 次）`)
+    this.log.info(
+      this.streams.size > 0
+        ? `等待客户端重新列举工具，${LIST_CHANGED_RETRY_MS / 1000}s 后未确认则重发（第 ${attempt}/${LIST_CHANGED_MAX_RETRIES} 次）`
+        : `工具列表变化暂无客户端流，${LIST_CHANGED_RETRY_MS / 1000}s 后重试（第 ${attempt}/${LIST_CHANGED_MAX_RETRIES} 次）`,
+    )
   }
 
-  /** Drop a pending `list_changed` (e.g. the child went unhealthy again). */
+  /**
+   * A client listed tools *and got some*. That — and only that — acknowledges a
+   * `list_changed` push. An empty answer is deliberately not an acknowledgement:
+   * it means the client is no better off than before, which is precisely the
+   * state the replay exists to repair.
+   */
+  private noteToolsListConfirmed(): void {
+    if (!this.listChangedPending) return
+    this.clearListChangedPending()
+    this.log.info('客户端已重新列举工具（工具列表变化投递确认）')
+  }
+
+  /** Drop a pending `list_changed` (acknowledged, or the child went unhealthy). */
   clearListChangedPending(): void {
     this.listChangedPending = false
     this.listChangedRetries = 0
@@ -585,6 +789,8 @@ export class McpFacade {
       return
     }
 
+    const wantsTools = requestsToolsList(body)
+
     const port = this.childPort()
     if (port !== null) {
       let proxied = await this.proxy(port, body)
@@ -603,6 +809,10 @@ export class McpFacade {
           res.writeHead(proxied.status === 200 ? 202 : proxied.status).end()
           return
         }
+        // A `tools/list` that actually carries tools is the one acknowledgement
+        // the replay waits for; note it *after* the answer is known, so an empty
+        // result (child absent or unresponsive) never silences the retries.
+        if (wantsTools && toolsListHasTools(proxied.body)) this.noteToolsListConfirmed()
         res.writeHead(proxied.status, {
           'Content-Type': proxied.contentType,
           'Content-Length': Buffer.byteLength(proxied.body),
@@ -612,6 +822,7 @@ export class McpFacade {
       }
       // Fall through to the local answers: the child died between the health
       // check and this request, and a valid empty answer beats a broken socket.
+      // That answer is empty by construction, so it is not an acknowledgement.
     }
 
     this.answerLocally(body, res)
@@ -646,6 +857,45 @@ export class McpFacade {
     }
   }
 
+  /**
+   * Repair a proxied handshake response on its way through the facade.
+   *
+   * Same discipline as `repairToolsList`: change exactly one field, only for the
+   * methods whose answer can carry the capability (`initialize` and
+   * `server/discover`), only for responses whose id matches a request we
+   * actually forwarded, and hand anything unexpected through untouched with a
+   * warning rather than guessing.
+   */
+  private repairHandshake(requestBody: string, responseBody: string, contentType: string): string {
+    if (responseBody === '') return responseBody
+    const requests = handshakeRequests(requestBody)
+    if (requests.size === 0) return responseBody
+    const methods = [...new Set(requests.values())].join(' / ')
+    if (!contentType.includes('json')) {
+      this.log.warn(`握手响应（${methods}）返回了非 JSON 内容（${contentType}），未做能力补全`)
+      return responseBody
+    }
+    try {
+      const parsed: unknown = JSON.parse(responseBody)
+      const { repaired, unexpected } = repairHandshakeResult(parsed, requests)
+      for (const method of unexpected) {
+        this.log.warn(`${method} 响应结构不符合预期，未补全 tools.listChanged（原样透传）`)
+      }
+      if (repaired.length === 0) return responseBody
+      for (const method of repaired) {
+        this.log.info(
+          method === 'initialize'
+            ? '已为 initialize 响应补上 tools.listChanged（子进程不广告该能力，不补桥就装不上 list_changed 处理器）'
+            : '已为 server/discover 响应补上 tools.listChanged（现代协议按该响应判定能力，不补同样装不上处理器）',
+        )
+      }
+      return JSON.stringify(parsed)
+    } catch (error) {
+      this.log.warn(`握手响应无法解析，未做能力补全：${(error as Error).message}`)
+      return responseBody
+    }
+  }
+
   /** Proxy one request to the child. Returns null when the child is unreachable. */
   private async proxy(port: number, body: string): Promise<{ status: number; body: string; contentType: string } | null> {
     try {
@@ -656,9 +906,12 @@ export class McpFacade {
         signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
       })
       const contentType = response.headers.get('content-type') ?? 'application/json; charset=utf-8'
+      // Both response repairs are gated on the request method, so at most one of
+      // them ever parses; a request that is neither is forwarded byte-identical.
+      const handshakeFixed = this.repairHandshake(body, await response.text(), contentType)
       return {
         status: response.status,
-        body: this.repairToolsList(body, await response.text(), contentType),
+        body: this.repairToolsList(body, handshakeFixed, contentType),
         contentType,
       }
     } catch (error) {
@@ -820,8 +1073,11 @@ export class McpFacade {
     }
     if (replayed || healthy) {
       // Only send if the stream is still open: a client that dropped in
-      // the probe window reconnects and gets its own reconciliation.
-      if (this.streams.has(res)) this.deliverListChanged()
+      // the probe window reconnects and gets its own reconciliation. This goes
+      // through the push-and-verify cycle, so a client that is not ready to
+      // receive yet (handler still being installed) is retried rather than
+      // missed.
+      if (this.streams.has(res)) this.pushToolsChanged()
     }
   }
 }

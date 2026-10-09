@@ -40,6 +40,9 @@ fi
 echo "== 校验内置清单 =="
 node scripts/verify-manifest.mjs
 
+echo "== 校验清单门禁本身（默认版本必须可校验）=="
+node scripts/check-manifest-guard.mjs
+
 echo "== 校验 profile patch（解析失败会让 DSH 起不来）=="
 node scripts/check-patch.mjs
 

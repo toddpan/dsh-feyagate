@@ -3,9 +3,22 @@
 > **这个文件解决什么问题**：让三类读者各自在 3 分钟内找到自己要看的东西 —— 想装的人拿到最短安装路径，想贡献的人拿到开发环境与目录职责，关心合规的人拿到"仓库里到底有什么、没有什么"。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.3.1`
+npm 包名 `dsh-feyagate` · 版本 `0.3.4`
 
-> **0.3.1 变更**：重新生成 `manifest/server-manifest.json`。上游 `miloco-mcp-server` v1.2.20 的 mac-arm64 产物
+> **0.3.4 修复：Windows 上「安装后台服务」必然失败**。0.3.3（npm 上那一版）的清单里
+> `channel.stable["win-x64"]` 指向 **v1.2.19**，而该版本上游**只发了 zip、没有
+> `.sha256` sidecar**，清单只能记 `sha256: null`；安装流程的设计是"没有校验值一律拒装"
+> （见「故障排查」里的 `FG-PKG-001`），于是 Windows 用户点按钮只会看到
+> 「上游未为 miloco-mcp-server-1.2.19-windows-x64.zip 提供校验值」。0.3.4 把
+> `win-x64` 的默认版本改成 **v1.2.21**（`miloco-mcp-server-windows-x64-v1.2.21.zip`，
+> sha256 `2ff4e9b2…985f`，与上游 sidecar 逐字符一致）。
+> 同时修掉**让这个坏清单通过 CI 的原因**：`verify-manifest.mjs` 以前检查 `assets[0]`
+> 且只对"默认版本没有校验值"报 warning，现在它按运行时同一套排序（`zip > tar.gz > exe`，
+> 同类型优先带校验值）取真正会被下载的那个资产，并把"默认装不上"升级为**错误**；
+> 新增 `scripts/check-manifest-guard.mjs` 用真清单做底稿钉死这条规则。
+> 以后 `npm run build` / `npm run check` 会直接失败，而不是把这种清单发出去。
+
+> **0.3.1 变更（历史）**：重新生成 `manifest/server-manifest.json`。上游 `miloco-mcp-server` v1.2.20 的 mac-arm64 产物
 > 已于 2026-09-25 重新打包并覆盖发布（旧包缺 4 个依赖库导致启动即 `dyld: Library not loaded`，且 MQTT 未编入
 > 导致华为设备能登录却无法控制）。清单里的 sha256 必须跟着更新，否则安装会以**校验不通过**结束 ——
 > 请先升级插件到 `0.3.1` 再安装/升级后台服务。
@@ -69,7 +82,7 @@ npm 包名 `@dsh-external/dsh-feyagate-gateway` · 版本 `0.3.1`
 ### 1. 装插件
 
 ```bash
-dsh plugin --profile <profile> add @dsh-external/dsh-feyagate-gateway
+dsh plugin --profile <profile> add dsh-feyagate
 ```
 
 `<profile>` 是你要装进去的 profile 名（例如 `web`）。这条命令把参数原样转发给 pnpm，并在 `package.json` 里看到 `dsh.bundle.patch` 后把本插件的 bundle 追加进 `dsh.profile.bundles` —— **不需要手改 profile 文件**。装完重启（或让 HMR 重合成配置层）后，设置面板左侧会多出一行「**飞阳网关**」。
@@ -238,7 +251,7 @@ node scripts/gen-manifest.mjs --compute-missing   # 对没有 sidecar 的资产�
 
 `--compute-missing` 的意义：`sha256: null` 的资产**必须先由用户显式确认才能安装**。它对"默认目标"把这条路走通，更早的钉版本仍然留在不可校验状态，因此不在 happy path 上。
 
-`package.json` 里另有 `npm run check:manifest`（→ `scripts/verify-manifest.mjs`）用于校验清单自洽（资产 URL 与文件名一致、`channel` 指向存在的资产、`pluginCompat` 区间合法），适合接进 CI。
+`package.json` 里另有 `npm run check:manifest`（→ `scripts/verify-manifest.mjs`）用于校验清单自洽（资产 URL 与文件名一致、`channel` 指向存在的资产、`pluginCompat` 区间合法），以及 `npm run check:manifest-guard`（→ `scripts/check-manifest-guard.mjs`）用真清单做底稿的自检。**两条都是硬门禁**：`channel.stable[平台]` 指向的版本，其"运行时会真正下载的那个资产"必须有 sha256 —— 否则该平台点「安装后台服务」必然被校验门拒绝（0.3.3 在 Windows 上就是这样翻车的）。适合接进 CI。
 
 ---
 
@@ -292,7 +305,7 @@ node scripts/gen-manifest.mjs --compute-missing   # 对没有 sidecar 的资产�
 rm -rf ~/.dsh/dsh-feyagate
 
 # 3) 卸载插件本体
-dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
+dsh plugin --profile <profile> remove dsh-feyagate
 ```
 
 只想留数据、只删二进制？删 `~/.dsh/dsh-feyagate/versions` 与 `current` 即可（界面上的「卸载服务」做的就是这件事，凭据与配置保留）。
@@ -313,6 +326,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 | 服务起不来：**依赖缺失** | 上游产物漏带运行库。**已实测**：`mac-arm64 v1.2.20` 的二进制声明依赖 `lib/libyaml-cpp.0.9.dylib`、`libavcodec.62.dylib`、`libavutil.60.dylib`、`libswscale.9.dylib`，而归档里只有 `libmiot_camera_lite.dylib` —— dyld 立即中止，进程活不过 20 毫秒 | 插件报 `FG-PKG-004`「安装包缺少运行库」，**并在同一条错误里附上子进程自己打印的 dyld 原文**（折叠在「技术细节」）。这是上游发布包的问题，换一个版本或等上游修；Linux 侧是否有同类缺失**尚未实测**，按日志里的 `error while loading shared libraries` 判断。华为控制另需 `libmosquitto`，缺失时是**降级**不是故障（`brew install mosquitto` 后重启服务） |
 | 服务起不来：**健康检查超时** | 20 秒内 `/health` 无 2xx（端口冲突 / 被安全策略拦 / 依赖缺失三类之一） | 报 `FG-BOOT-001`，界面给「查看日志 / 换端口重试 / 重新安装」三个出口；不要只看转圈，日志末行一定有原因。**子进程若在就绪前就退出，插件立刻失败并把它最后 12 行输出一起报出来**，不会再让你等满 20 秒；启动期退出也不会进入崩溃重启循环 |
 | **GitHub 不可达** | 代理 / 防火墙 / 企业策略拦了 `github.com` | 触发多源降级：GitHub Releases → FOTA（`oneapi.sooncore.com/ota/fota.json`，带 md5）→ 可配置镜像 → 本地包。界面报 `FG-NET-001`，给「重试 / 改用镜像地址 / 复制诊断信息」 |
+| **点「安装后台服务」立刻报「上游未为 … 提供校验值」**（连下载都没开始） | 内置清单把该平台的默认版本指向了一个上游**没有 `.sha256` sidecar** 的资产，清单里因此记着 `sha256: null`，而安装流程在**下载之前**就会拒绝（不是下载失败，也不是校验不通过） | 升级插件即可（0.3.3 的 Windows 就是这一种）；升级前想先装上，只有两条合规路径：设置里显式勾选「允许安装无法校验的版本」（你自己的判断），或用「指定版本」挑一个带校验值的版本。**不要**把这条错误当成网络问题 |
 | **校验失败** | 下载不完整、代理缓存了坏文件，或资产没有 sha256 sidecar | `FG-PKG-001`：插件**删除已下载文件并中止**，文案直接给出"期望 vs 实际"的摘要。`FG-NET-004`：服务器没提供校验文件 → 出于安全**不会安装**，需要换源或走本地包；清单里 `sha256: null` 的资产必须由你显式确认才装 |
 | **摄像头功能不可用** | ① Windows 平台不支持（依赖米家 P2P 协议库，只支持 macOS / Linux）；② 米家未登录；③ 小米专有库 `libmiot_camera_lite` 在上游包里缺失 | ①②界面会直接说明并给动作；③显示为「**降级运行 + 原因**」：摄像头不可用，其它平台照常工作 |
 | 华为设备**能看不能控** | 命令通道（消息中心 MQTT 长连接）未建立：华为云没有 REST 写通道，控制必须走 MQTT | 界面显示「命令通道未建立 —— 状态可读，控制会失败」+ 修复指引（缺 `libmosquitto` 时 `brew install mosquitto`，装完需重启服务）。这是**降级**，不是错误 |
@@ -342,10 +356,10 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-feyagate-gateway
 - Node.js ≥ 20.16.0（`engines.node` 与 `engines.dsh >= 0.1.5-rc.1`）。
 - **全新克隆的入口只有一条命令**：`npm install && npm test`。`lib/` 是构建产物、不在仓库里，所以下面那些依赖 `lib/` 的检查必须先 `npm run build`；`npm test` 已经包含构建。
 - 构建：`npm run build`（= `bash scripts/build.sh`，产出 `lib/index.js` 与 `lib/client.js`）。也可分开跑：`npm run build:client`（tsdown 打浏览器半侧 lazy-CJS）、`npm run typecheck`（tsc 只检查不产出）。
-- **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:patch`。
+- **静态检查**（不需要构建，改完随手就能跑）：`npm run check` = `typecheck` + `check:manifest` + `check:manifest-guard` + `check:patch`。
 - **需要构建的检查**：`npm run check:runtime` = 下载层自检 + 离线冒烟（`smoke.mjs --offline`）+ 属主/看门狗（`check-supervise-ownership.mjs`）+ 涂鸦二维码（`check-tuya-qr.mjs`）+ 平台授权（`check-platform-auth.mjs`）。
 - **完整验收**：`npm test` = `build` + `check` + `check:runtime` + `smoke:install`，共 **237 项计数断言**（24 补丁格式 + 5 下载层 + 19 离线冒烟 + 10 属主/看门狗 + 26 涂鸦二维码 + 54 平台授权 + 99 安装生命周期），另有类型检查与清单结构校验。安装生命周期覆盖：装 / 升级 / 回滚 / 校验不符拒装 / 无校验值默认拒装 / 真重装 / SIGKILL 自愈 / **接管未就绪进程** / 卸载留数据 / **启动即失败快速失败 + 失败不留脏状态 + 同版本重试真的重试**。
-- 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验）。
+- 清单维护：`npm run manifest`（重新生成）、`npm run check:manifest`（CI 校验 + 校验值门禁）、`npm run check:manifest-guard`（门禁自身的自检）。
 - 端到端冒烟：`npm run smoke`（默认会真的去 GitHub 下载；加 `--offline` 跳过）。
 
 > 冒烟脚本会往 `.smoke/`（`smoke-install.mjs` 用 `.smoke-install/`）写下载物与状态，两者都已在 `.gitignore` 里。
@@ -364,7 +378,10 @@ app/dsh-feyagate/
 ├── manifest/server-manifest.json      ★ 权威清单：逐平台真实文件名 + sha256 + 兼容区间 + 默认通道
 ├── scripts/gen-manifest.mjs  ★ 唯一维护清单的入口（见「为什么需要清单」）
 ├── scripts/build.sh          tsc + tsdown 串起来，产出 lib/
-├── scripts/verify-manifest.mjs CI 校验清单自洽
+├── scripts/verify-manifest.mjs CI 校验清单自洽 + 默认版本必须可校验
+├── scripts/check-manifest-guard.mjs 上面那条门禁的自检（合成形状 + 真清单底稿）
+├── scripts/manifest-rules.mjs   清单规则本体（CLI 与自检共用同一份；**不要放进 scripts/lib/**，
+│                              `.gitignore` 的 `lib/` 会把它一起忽略掉）
 ├── scripts/check-tuya-qr.mjs  涂鸦二维码：编码后用独立解码器读回
 ├── scripts/check-platform-auth.mjs  平台授权：能力协商 / 凭据边界 / 门禁与分流
 ├── scripts/smoke.mjs         端到端冒烟：真下载 → 真校验 → 真解压 → 真启动
@@ -414,7 +431,9 @@ app/dsh-feyagate/
 |---|---|
 | `scripts/gen-manifest.mjs` | 抓 GitHub Releases，逐资产识别平台与打包类型，抓 `.sha256` sidecar，算出逐平台默认版本，写出 `manifest/server-manifest.json`。支持 `--tag` 与 `--compute-missing` |
 | `scripts/build.sh` | 先 `tsc -p tsconfig.json` 编 Host（含 `.d.ts` → `lib/types/`），再 `tsdown` 打浏览器半侧 |
-| `scripts/verify-manifest.mjs` | CI 校验：清单自洽（资产 URL 与文件名一致、`channel` 指向存在的资产、`pluginCompat` 区间合法） |
+| `scripts/verify-manifest.mjs` | CI 校验：清单自洽（资产 URL 与文件名一致、`channel` 指向存在的资产、`pluginCompat` 区间合法），并**按运行时同一套排序**确认默认版本的主资产带 sha256（没有就退出码 1）。可带一个可选参数检查历史清单：`node scripts/verify-manifest.mjs <path>` |
+| `scripts/check-manifest-guard.mjs` | 上面那条"默认版本必须可校验"规则的自检：用真清单做底稿，分别构造"默认版本无校验值"与"可校验资产排在数组前面、不可校验的 zip 在后面"两种形状，断言前者报错、后者也报错（证明判定跟运行时排序走而不是 `assets[0]`） |
+| `scripts/manifest-rules.mjs` | 清单规则本体（`validateManifest` / `pickPrimaryAsset` / `assetRank`）。CLI 与自检**共用这一份**，避免"规则改了但门禁还是老规则" |
 | `scripts/selfcheck-download.mjs` | 下载/校验/解压层的单元自检（用构造出来的归档，不联网）：校验失败必须删掉坏包且绝不落位、无校验值默认拒绝、顶层目录上移、找不到二进制时报错而不是静默成功 |
 | `scripts/check-patch.mjs` | 校验 `cordis.patch.yml`：用与 DSH 完全相同的解析方式（`parseDocument` + `tag:yaml.org,2002:js`）解析，并**实际执行** `url` 表达式，确认它能读到 `state.json` 的漂移端口 |
 | `scripts/check-tuya-qr.mjs` | 涂鸦授权：token→二维码（PNG 与文本兜底**都用独立解码器 `jsqr` 读回**，不只看「产生了图片」）、`chat_display` 文案、路由端到端、非法 token 400（26 项断言） |
@@ -422,7 +441,7 @@ app/dsh-feyagate/
 | `scripts/check-supervise-ownership.mjs` | 属主与看门狗：pid 文件写明属主时**访客不得杀掉别人的子进程**（只如实报告），属主消失后才允许替换，无人拥有的会被接管并登记自己为属主（10 项断言，用快速看门狗参数，约 3 秒） |
 | `scripts/smoke.mjs` | 插件对外契约：`apply()`、门面在无子进程时的应答、HTTP API、Origin 校验。加 `--offline` 跳过需要下载的内网测试 |
 | `scripts/smoke-install.mjs` | 安装生命周期：用**合成发行包**跑 校验 → 解压 → 激活 → 启动 → 健康 → 转发 → 升级 → 回滚 → 崩溃自愈 → 接管未就绪进程 → 卸载保数据 → 启动即失败（90 项断言） |
-| `npm run check` | 静态检查三件套：类型 + 清单 + patch。**不需要构建**，改完随手可跑 |
+| `npm run check` | 静态检查四件套：类型 + 清单 + 清单门禁 + patch。**不需要构建**，改完随手可跑 |
 | `npm run check:runtime` | 需要构建的检查：下载层自检 + 离线冒烟 + 属主/看门狗 + 涂鸦二维码 + 平台授权 |
 | `npm test` | `build` + `check` + `check:runtime` + `smoke:install`，本仓库的完整验收（237 项计数断言） |
 | `npm run typecheck` | `tsc --noEmit`，只检查不产出 |

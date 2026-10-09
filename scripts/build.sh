@@ -57,7 +57,7 @@ const { readFileSync } = require("node:fs");
 const code = readFileSync("lib/client.js", "utf8");
 const problems = [];
 if (!code.includes("window.__ModuleLoader__.load(")) problems.push("缺少 window.__ModuleLoader__.load(...) 包装");
-if (!/\bid:\s*"@dsh-external\/dsh-feyagate-gateway"/.test(code)) problems.push("load() 的 id 与包名不一致");
+if (!/\bid:\s*"dsh-feyagate"/.test(code)) problems.push("load() 的 id 与包名不一致");
 if (!code.includes("factory:")) problems.push("缺少 factory");
 // Every bare require must be a platform-seeded module; a typo or a forgotten
 // `neverBundle` entry would otherwise surface as a blank settings page at run

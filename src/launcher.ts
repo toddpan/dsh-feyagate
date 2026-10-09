@@ -25,7 +25,7 @@ export interface LauncherInfo {
   profileKnown: boolean
 }
 
-const PACKAGE_NAME = '@dsh-external/dsh-feyagate-gateway'
+const PACKAGE_NAME = 'dsh-feyagate'
 
 /** Read `--profile <name>` / `--profile=<name>` from the host's arguments. */
 function detectProfile(): string | null {

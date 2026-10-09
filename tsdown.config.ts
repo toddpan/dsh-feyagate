@@ -1,6 +1,6 @@
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = '@dsh-external/dsh-feyagate-gateway'
+const PLUGIN_ID = 'dsh-feyagate'
 
 /**
  * Modules the web frontend seeds into `window.__ModuleLoader__` for every

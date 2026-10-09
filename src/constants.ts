@@ -6,7 +6,7 @@
  */
 
 /** npm package name; also the Cordis entry id used in doctor output. */
-export const PLUGIN_ID = '@dsh-external/dsh-feyagate-gateway'
+export const PLUGIN_ID = 'dsh-feyagate'
 
 /** Short name used for directory names, log prefixes, and DOM ids. */
 export const PLUGIN_SHORT = 'dsh-feyagate'

@@ -52,7 +52,7 @@
 # ESM host reaches `node:fs` without `require`.
 - insert:
     - id: feyagate-gateway
-      name: '@dsh-external/dsh-feyagate-gateway'
+      name: 'dsh-feyagate'
     - id: feyagate-gateway-mcp
       name: '@deepseek-ai/dsh-mcp-client'
       config:

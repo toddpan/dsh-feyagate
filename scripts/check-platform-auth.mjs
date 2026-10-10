@@ -21,7 +21,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = join(fileURLToPath(import.meta.url), '..', '..')
 
@@ -40,8 +40,8 @@ function check(name, condition, detail = '') {
 const SECRET = 'sup3rs3cret-Pa55w0rd'
 
 async function main() {
-  const { GatewayRuntime } = await import(join(projectRoot, 'lib', 'runtime.js'))
-  const { createApiHandler } = await import(join(projectRoot, 'lib', 'api.js'))
+  const { GatewayRuntime } = await import(pathToFileURL(join(projectRoot, 'lib', 'runtime.js')).href)
+  const { createApiHandler } = await import(pathToFileURL(join(projectRoot, 'lib', 'api.js')).href)
 
   // ── 假子进程：MCP + 华为 REST，两套接口都按真实形状答 ──────────────
   const seen = { toolCalls: [], tuyaPolls: 0, callbackCode: null }

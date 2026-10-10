@@ -14,7 +14,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import jsQR from 'jsqr'
 import { PNG } from 'pngjs'
@@ -79,12 +79,10 @@ function textArtToMatrix(art) {
 }
 
 async function main() {
-  const { tuyaQrPayload, tuyaQrImagePath, tuyaQrTextPath, tuyaQrChatDisplay, tuyaQrNextAction, isTuyaToken } = await import(
-    join(projectRoot, 'lib', 'tuya-qr.js')
-  )
-  const { renderTuyaQrPng, renderTuyaQrText, InvalidTuyaTokenError } = await import(join(projectRoot, 'lib', 'qr-image.js'))
-  const { createApiHandler } = await import(join(projectRoot, 'lib', 'api.js'))
-  const { GatewayRuntime } = await import(join(projectRoot, 'lib', 'runtime.js'))
+  const { tuyaQrPayload, tuyaQrImagePath, tuyaQrTextPath, tuyaQrChatDisplay, tuyaQrNextAction, isTuyaToken } = await import(pathToFileURL(join(projectRoot, 'lib', 'tuya-qr.js')).href)
+  const { renderTuyaQrPng, renderTuyaQrText, InvalidTuyaTokenError } = await import(pathToFileURL(join(projectRoot, 'lib', 'qr-image.js')).href)
+  const { createApiHandler } = await import(pathToFileURL(join(projectRoot, 'lib', 'api.js')).href)
+  const { GatewayRuntime } = await import(pathToFileURL(join(projectRoot, 'lib', 'runtime.js')).href)
 
   console.log('\n== 涂鸦授权：二维码 / 聊天文案 / HTTP 路由 ==')
 

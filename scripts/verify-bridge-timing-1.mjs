@@ -33,7 +33,7 @@
 import { createServer } from 'node:http'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = join(fileURLToPath(import.meta.url), '..', '..')
 const keep = process.argv.includes('--keep')
@@ -275,7 +275,7 @@ writeFileSync(
 )
 
 // 真插件：apply()（门面绑定 → startService 不 await，会真正 spawn 假子进程）。
-const { apply } = await import(join(projectRoot, 'lib', 'index.js'))
+const { apply } = await import(pathToFileURL(join(projectRoot, 'lib', 'index.js')).href)
 const disposers = []
 const logLines = []
 const ctx = {

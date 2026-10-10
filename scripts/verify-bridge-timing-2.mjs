@@ -34,7 +34,7 @@ import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = join(fileURLToPath(import.meta.url), '..', '..')
 const keep = process.argv.includes('--keep')
@@ -269,7 +269,7 @@ writeFileSync(
 check('state.json 预写 autoStart=false（startService 不自动拉起子进程）', true, '模拟「桥连时服务未启动」')
 
 // 真插件：apply()（门面绑定；startService 因 autoStart=false 不拉起子进程）。
-const { apply } = await import(join(projectRoot, 'lib', 'index.js'))
+const { apply } = await import(pathToFileURL(join(projectRoot, 'lib', 'index.js')).href)
 const disposers = []
 const logLines = []
 const capturedRoutes = []

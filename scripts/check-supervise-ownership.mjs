@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = join(fileURLToPath(import.meta.url), '..', '..')
 const base = join(projectRoot, '.smoke-ownership')
@@ -98,9 +98,9 @@ async function main() {
   if (!existsSync(join(projectRoot, 'lib', 'supervise', 'process.js'))) {
     throw new Error('先构建：npm run build')
   }
-  const { Supervisor } = await import(join(projectRoot, 'lib', 'supervise', 'process.js'))
-  const { StateStore } = await import(join(projectRoot, 'lib', 'state.js'))
-  const { LogBuffer } = await import(join(projectRoot, 'lib', 'log.js'))
+  const { Supervisor } = await import(pathToFileURL(join(projectRoot, 'lib', 'supervise', 'process.js')).href)
+  const { StateStore } = await import(pathToFileURL(join(projectRoot, 'lib', 'state.js')).href)
+  const { LogBuffer } = await import(pathToFileURL(join(projectRoot, 'lib', 'log.js')).href)
 
   console.log('\n== 属主与看门狗检查 ==\n   规则：属主可以替换卡死的子进程，访客只能如实报告\n')
 

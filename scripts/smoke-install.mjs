@@ -370,7 +370,7 @@ const ctx = {
   },
 }
 
-const { apply } = await import(join(pkg, 'lib', 'index.js'))
+const { apply } = await import(pathToFileURL(join(pkg, 'lib', 'index.js')).href)
 await apply(ctx, { installRoot: join(base, 'root') })
 
 const apiRoute = routes.find((route) => route.path === '/dsh-feyagate')

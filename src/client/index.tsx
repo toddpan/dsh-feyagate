@@ -60,13 +60,17 @@ function withApiPrefix(path: string): string {
   return path.startsWith(API_PREFIX) ? path : `${API_PREFIX}${path}`
 }
 
+/**
+ * 六个分区的导航。`blurb` 是每个分区自己的一句话职责 —— tab 上只放 2 个字的短
+ * 标签，长解释放到内容区顶部，避免用户先在标签栏里做阅读理解。
+ */
 const TABS = [
-  { id: 'service', label: '服务' },
-  { id: 'license', label: '授权' },
-  { id: 'accounts', label: '账号总览' },
-  { id: 'login', label: '平台登录' },
-  { id: 'settings', label: '设置' },
-  { id: 'logs', label: '日志' },
+  { id: 'service', label: '服务', blurb: '后台服务装没装、什么版本、正不正常，以及安装 / 升级 / 启动 / 停止' },
+  { id: 'login', label: '平台登录', blurb: '在这里登录或退出米家、涂鸦、美的、易微联、华为账号' },
+  { id: 'accounts', label: '账号总览', blurb: '只看状态：哪个平台登录还在、掉了没有（不改任何东西）' },
+  { id: 'license', label: '授权', blurb: '免费版能用哪些平台、授权码怎么填、试用还剩多久' },
+  { id: 'settings', label: '设置', blurb: '端口、监听地址、下载镜像、开机自启等插件本身的选项' },
+  { id: 'logs', label: '日志', blurb: '插件与后台服务合并的运行日志，出问题时把这段发给开发者' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -74,21 +78,34 @@ type TabId = (typeof TABS)[number]['id']
 // ────────────────────────────────────────────────────────────────── 样式
 
 const CSS = `
-.fg-root { display: flex; flex-direction: column; gap: 14px; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 1.6; }
-.fg-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--dsw-alias-border-l2); padding-bottom: 6px; }
-.fg-tab { appearance: none; border: 1px solid transparent; background: transparent; color: var(--dsw-alias-label-secondary);
+.fg-root { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 1.6; }
+
+/* 顶部状态条：一句话说明现在是好是坏，右边只放"需要用户做的事"。 */
+.fg-statusbar { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; padding: 10px 12px; background: var(--dsw-alias-bg-layer-2); }
+.fg-statusbar-main { flex: 1 1 260px; min-width: 0; }
+.fg-statusbar-line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-weight: 600; }
+.fg-statusbar-detail { color: var(--dsw-alias-label-secondary); margin-top: 2px; overflow-wrap: anywhere; }
+.fg-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px;
+  color: var(--dsw-alias-label-caption); font-size: 12px; }
+.fg-statusbar-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* 分区导航：横排小胶囊，窄了就换行；每项下面配一句该分区的职责。 */
+.fg-nav { display: flex; flex-direction: column; gap: 6px; }
+.fg-nav-items { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--dsw-alias-border-l2); padding-bottom: 6px; }
+.fg-nav-item { appearance: none; border: 1px solid transparent; background: transparent; color: var(--dsw-alias-label-secondary);
   font: inherit; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
-.fg-tab:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-.fg-tab[aria-selected="true"] { background: var(--dsw-alias-interactive-bg-active); color: var(--dsw-alias-label-primary); font-weight: 600; }
+.fg-nav-item:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.fg-nav-item[aria-selected="true"] { background: var(--dsw-alias-interactive-bg-active); color: var(--dsw-alias-label-primary); font-weight: 600; }
+.fg-blurb { color: var(--dsw-alias-label-caption); font-size: 12px; }
+
 .fg-card { border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; padding: 12px 14px; background: var(--dsw-alias-bg-layer-2); }
 .fg-card + .fg-card { margin-top: 10px; }
 .fg-card-title { font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .fg-hint { color: var(--dsw-alias-label-caption); font-size: 12px; }
-.fg-hero { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
-.fg-hero-main { flex: 1 1 260px; min-width: 0; }
-.fg-hero-state { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 14px; }
-.fg-hero-detail { color: var(--dsw-alias-label-secondary); margin-top: 2px; overflow-wrap: anywhere; }
-.fg-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.fg-hint + .fg-hint { margin-top: 4px; }
+.fg-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; max-width: 520px; }
+
 .fg-btn { appearance: none; font: inherit; border-radius: 7px; padding: 5px 12px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
 .fg-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
@@ -98,9 +115,26 @@ const CSS = `
 .fg-btn-danger { color: var(--dsw-alias-label-error); }
 .fg-btn-danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger); }
 .fg-btn-ghost { border-color: transparent; background: transparent; color: var(--dsw-alias-link); padding-left: 2px; padding-right: 2px; }
-.fg-grid { display: grid; grid-template-columns: minmax(96px, max-content) 1fr; gap: 4px 12px; align-items: baseline; }
+
+/* 版本块：左边结论 + 事实，右边一个主按钮；完整版本号只在需要时展开。 */
+.fg-version { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.fg-version-main { flex: 1 1 240px; min-width: 0; }
+.fg-version-lead { font-weight: 600; }
+.fg-version-facts { display: flex; gap: 4px 14px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
+.fg-version-fact { color: var(--dsw-alias-label-caption); }
+.fg-version-fact > b { color: var(--dsw-alias-label-primary); font-weight: 600; }
+.fg-version-note { color: var(--dsw-alias-label-caption); font-size: 12px; margin-top: 6px; }
+.fg-version-action { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 100%; }
+
+/* 次要内容默认折叠：主流程只留一条路，专家选项按需展开。 */
+.fg-fold { margin-top: 10px; border-top: 1px solid var(--dsw-alias-border-l1); padding-top: 8px; }
+.fg-fold > summary { cursor: pointer; color: var(--dsw-alias-link); font-size: 12px; }
+.fg-fold[open] > summary { margin-bottom: 6px; }
+
+.fg-grid { display: grid; grid-template-columns: minmax(88px, max-content) minmax(0, 1fr); gap: 4px 12px; align-items: baseline; }
 .fg-grid > dt { color: var(--dsw-alias-label-secondary); }
 .fg-grid > dd { margin: 0; overflow-wrap: anywhere; }
+.fg-grid + .fg-grid { margin-top: 8px; }
 .fg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .fg-code { display: block; background: var(--dsw-alias-markdown-code-block); border-radius: 6px; padding: 8px 10px;
   overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -108,12 +142,25 @@ const CSS = `
   background: #fff; border: 1px solid var(--dsw-alias-border-l3); }
 .fg-link { color: var(--dsw-alias-brand-primary); text-decoration: underline; cursor: pointer; }
 .fg-form-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+
 .fg-tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
   border: 1px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-secondary); }
 .fg-tag-ok { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
 .fg-tag-warn { color: var(--dsw-alias-state-warn-primary); border-color: var(--dsw-alias-state-warn-primary); }
 .fg-tag-bad { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-primary); }
 .fg-tag-busy { color: var(--dsw-alias-state-business-primary); border-color: var(--dsw-alias-state-business-primary); }
+
+/* 服务状态一行流：● 运行中 · 端口 38080 · 已运行 3 分 12 秒 · 重启 0 次 */
+.fg-statline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fg-statline > .fg-statsep { color: var(--dsw-alias-label-dimmed); }
+.fg-statline > .fg-statlabel { color: var(--dsw-alias-label-secondary); }
+.fg-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--dsw-alias-state-idle-primary); }
+.fg-dot-ok { background: var(--dsw-alias-state-success-primary); }
+.fg-dot-busy { background: var(--dsw-alias-state-business-primary); }
+.fg-dot-warn { background: var(--dsw-alias-state-warn-primary); }
+.fg-dot-bad { background: var(--dsw-alias-state-error-primary); }
+
 .fg-state-idle { color: var(--dsw-alias-label-secondary); }
 .fg-state-busy { color: var(--dsw-alias-state-business-primary); }
 .fg-state-ok { color: var(--dsw-alias-state-success-primary); }
@@ -273,13 +320,19 @@ function Btn(props: {
   )
 }
 
-function Card(props: { title?: React.ReactNode; children: React.ReactNode }): React.ReactElement {
+function Card(props: { title?: React.ReactNode; sub?: React.ReactNode; children: React.ReactNode }): React.ReactElement {
   return (
     <section className="fg-card">
       {props.title === undefined ? null : <div className="fg-card-title">{props.title}</div>}
+      {props.sub === undefined ? null : <div className="fg-hint">{props.sub}</div>}
       {props.children}
     </section>
   )
+}
+
+/** 状态圆点：把「运行中 / 已停止 / 异常」的颜色差异从文字里抽出来，一眼可扫。 */
+function Dot(props: { tone: StateView['tone'] }): React.ReactElement {
+  return <span className={`fg-dot${props.tone === 'idle' ? '' : ` fg-dot-${props.tone}`}`} aria-hidden="true" />
 }
 
 function Row(props: { main: React.ReactNode; sub?: React.ReactNode; right?: React.ReactNode }): React.ReactElement {
@@ -383,25 +436,35 @@ function usePoll<T>(path: string | null, intervalMs: number): Poll<T> {
   return { data, error, reload }
 }
 
-/** Wrap an action: busy flag, error capture, and a reload callback. */
+/**
+ * Wrap an action: busy flag, error capture, and a reload callback.
+ *
+ * `run` returns a promise that never rejects (the failure is already parked in
+ * `error`), so callers may chain extra work — the top status bar uses that to
+ * refresh the runtime status right after an install starts.
+ */
 function useAction(onDone: () => void): {
   busy: string | null
   error: string | null
   clearError: () => void
-  run: (label: string, body: () => Promise<unknown>) => void
+  run: (label: string, body: () => Promise<unknown>) => Promise<void>
 } {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const done = useRef(onDone)
   done.current = onDone
 
-  const run = useCallback((label: string, body: () => Promise<unknown>) => {
+  const run = useCallback(async (label: string, body: () => Promise<unknown>): Promise<void> => {
     setBusy(label)
     setError(null)
-    void body()
-      .then(() => done.current())
-      .catch((cause: unknown) => setError((cause as Error).message))
-      .finally(() => setBusy(null))
+    try {
+      await body()
+      done.current()
+    } catch (cause) {
+      setError((cause as Error).message)
+    } finally {
+      setBusy(null)
+    }
   }, [])
 
   return { busy, error, clearError: () => setError(null), run }
@@ -474,7 +537,54 @@ const JOB_PHASE_WORD: Record<JobSnapshot['phase'], string> = {
   cancelled: '已取消',
 }
 
-// ──────────────────────────────────────────────────────────────── 各 tab 面板
+// ────────────────────────────────────────────────────────── 各分区面板
+
+/**
+ * 根组件与「服务」页共用的服务操作入口：顶部状态条上的按钮和页面里的按钮调
+ * 的是同一段逻辑，两处不会给出不同的说法。
+ */
+interface ServiceAction {
+  busy: boolean
+  error: string | null
+  clearError: () => void
+  install: (target: string | null, allowUnverified: boolean, reinstall: boolean) => void
+  rollback: (target: string) => void
+  start: () => void
+  stop: () => void
+  restart: () => void
+  cancel: () => void
+  uninstall: (purgeData: boolean) => void
+}
+
+/** 「● 运行中 · 端口 38080 · 已运行 3 分 12 秒」。空字段直接不出现，不留一堆「—」。 */
+function ServiceStatusLine(props: { status: RuntimeStatus; withPid?: boolean }): React.ReactElement {
+  const status = props.status
+  const view = stateView(status)
+  const parts: string[] = []
+  if (status.state === 'not-installed') {
+    parts.push('还没有下载后台服务')
+  } else if (status.healthy) {
+    parts.push(`端口 ${status.effectivePort ?? status.port}`)
+    if (status.uptimeMs !== null) parts.push(`已运行 ${formatDuration(status.uptimeMs)}`)
+    if (props.withPid === true && status.pid !== null) parts.push(`进程号 ${status.pid}`)
+    if (status.restarts > 0) parts.push(`本次会话自动重启 ${status.restarts} 次`)
+  } else if (status.detail !== undefined) {
+    parts.push(status.detail)
+  }
+  return (
+    <div className="fg-statline">
+      <Dot tone={view.tone} />
+      <span className={TONE_CLASS[view.tone]}>{view.word}</span>
+      {status.currentVersion === null ? null : <span className="fg-tag">v{status.currentVersion}</span>}
+      {parts.map((part) => (
+        <React.Fragment key={part}>
+          <span className="fg-statsep">·</span>
+          <span className="fg-statlabel">{part}</span>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
 
 function JobProgress(props: { job: JobSnapshot | null; busy: boolean; onCancel: () => void }): React.ReactElement | null {
   const job = props.job
@@ -513,179 +623,255 @@ function JobProgress(props: { job: JobSnapshot | null; busy: boolean; onCancel: 
   )
 }
 
-function ServicePanel(props: { status: RuntimeStatus; reload: () => void }): React.ReactElement {
-  const { status, reload } = props
+function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }): React.ReactElement {
+  const { status, service } = props
   const job = usePoll<{ job: JobSnapshot | null; busy: boolean }>('/jobs/current', 900)
   const catalog = usePoll<{ versions: CatalogEntry[]; recommended: string | null; compat: RuntimeStatus['manifest'] }>(
     '/install/catalog',
     30_000,
   )
-  const action = useAction(reload)
   const [version, setVersion] = useState<string>('')
   const [allowUnverified, setAllowUnverified] = useState(false)
   const [confirmUninstall, setConfirmUninstall] = useState(false)
 
-  const busy = action.busy !== null
+  const busy = service.busy
   const versions = catalog.data?.versions ?? []
+  const catalogLoaded = catalog.data !== null
   const recommended = catalog.data?.recommended ?? null
   const installed = status.installedVersions
+  const notInstalled = status.currentVersion === null
   const updateAvailable = recommended !== null && status.currentVersion !== recommended
-
-  const startInstall = (target: string | null): void => {
-    action.run('install', () =>
-      post('/install', { version: target, allowUnverified, reinstall: target !== null && target === status.currentVersion }),
-    )
-  }
+  // 目前只有一个按钮会出现在主流程里；文案必须说清点了会发生什么。
+  const actionLabel = !catalogLoaded
+    ? '读取版本清单…'
+    : notInstalled
+      ? recommended === null
+        ? '安装推荐版本'
+        : `安装 v${recommended}`
+      : updateAvailable
+        ? `升级到 v${recommended}`
+        : '检查更新'
+  const currentJob = job.data?.job ?? null
 
   return (
     <div className="fg-root">
-      {action.error === null ? null : <ErrorCard raw={action.error} conclusion="服务操作未完成" onDismiss={action.clearError} />}
       {job.error === null ? null : <ErrorCard raw={job.error} conclusion="无法读取任务状态" />}
 
-      <Card title="版本">
-        <dl className="fg-grid">
-          <dt>当前版本</dt>
-          <dd>{status.currentVersion ?? '—'}</dd>
-          <dt>可升级到</dt>
-          <dd>
-            {recommended ?? '—'}
-            {updateAvailable ? <span className="fg-tag fg-tag-busy" style={{ marginLeft: 8 }}>有更新</span> : null}
-          </dd>
-          <dt>上一可用版本</dt>
-          <dd>{status.lastKnownGood ?? '—'}</dd>
-          <dt>已安装</dt>
-          <dd className="fg-mono">{installed.length === 0 ? '—' : installed.join('、')}</dd>
-          <dt>兼容区间</dt>
-          <dd className="fg-mono">
-            ≥ {status.manifest.minSupportedServer}
-            {status.manifest.maxTestedServer === null ? '' : ` · 已测至 ${status.manifest.maxTestedServer}`}
-          </dd>
-        </dl>
-        <div className="fg-actions">
-          {updateAvailable ? (
-            <Btn variant="primary" disabled={busy} onClick={() => startInstall(null)}>
-              {status.currentVersion === null ? '安装后台服务' : `升级到 v${recommended}`}
-            </Btn>
-          ) : null}
-          {status.currentVersion === null ? null : (
-            <Btn disabled={busy} onClick={() => startInstall(status.currentVersion)}>
-              重新安装当前版本
-            </Btn>
-          )}
-          {status.lastKnownGood === null || status.lastKnownGood === status.currentVersion ? null : (
-            <Btn disabled={busy} onClick={() => action.run('rollback', () => post('/install/rollback', { version: status.lastKnownGood }))}>
-              回滚到 v{status.lastKnownGood}
-            </Btn>
-          )}
-        </div>
-      </Card>
+      {currentJob === null ? null : (
+        <Card title="正在执行">
+          <JobProgress job={currentJob} busy={job.data?.busy === true} onCancel={service.cancel} />
+        </Card>
+      )}
 
-      <Card title="指定版本">
-        <div className="fg-hint">上游各平台的发布节奏不一致：Windows 停在 1.2.19，macOS Intel 与 Linux arm64 也落后于最新版。这里列出的是本机平台真实存在的版本。</div>
-        <div className="fg-field">
-          <label htmlFor="fg-version">版本</label>
-          <select
-            id="fg-version"
-            className="fg-input"
-            value={version}
-            onChange={(event) => setVersion(event.target.value)}
-          >
-            <option value="">（使用推荐版本 {recommended ?? '—'}）</option>
-            {versions.map((entry) => (
-              <option key={entry.version} value={entry.version}>
-                {entry.version}
-                {entry.installed ? '（已安装）' : ''}
-                {entry.unverified ? '（无校验值）' : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <label className="fg-check">
-          <input type="checkbox" checked={allowUnverified} onChange={(event) => setAllowUnverified(event.target.checked)} />
+      <Card
+        title={
           <span>
-            允许安装没有校验值的版本
-            <div className="fg-hint">上游未为该资产提供 sha256 时无法校验完整性。默认拒绝；只有你确认来源可信时才应开启。</div>
+            版本
+            {updateAvailable ? <span className="fg-tag fg-tag-busy">有更新</span> : null}
           </span>
-        </label>
-        <div className="fg-actions">
-          <Btn disabled={busy || versions.length === 0} onClick={() => startInstall(version === '' ? null : version)}>
-            安装所选版本
-          </Btn>
-          <Btn variant="ghost" onClick={catalog.reload}>
-            重新读取清单
-          </Btn>
+        }
+      >
+        <div className="fg-version">
+          <div className="fg-version-main">
+            <div className="fg-version-lead">
+              {notInstalled
+                ? catalogLoaded && recommended !== null
+                  ? `尚未安装，推荐安装 v${recommended}`
+                  : '尚未安装后台服务'
+                : updateAvailable
+                  ? `发现新版本 v${recommended}`
+                  : catalogLoaded
+                    ? '已经是最新版本'
+                    : `当前版本 v${status.currentVersion}`}
+            </div>
+            <div className="fg-version-facts">
+              <span className="fg-version-fact">
+                本机版本 <b>{status.currentVersion ?? '未安装'}</b>
+              </span>
+              <span className="fg-version-fact">
+                最新可用 <b>{recommended ?? (catalogLoaded ? '暂无' : '读取中…')}</b>
+              </span>
+              {installed.length > 1 ? <span className="fg-version-fact">已下载 <b>{installed.length}</b> 个版本</span> : null}
+            </div>
+            <div className="fg-version-note">
+              {notInstalled
+                ? '安装会从官方发布渠道下载后台服务，校验通过后才启用；失败不会留下半个版本。'
+                : '重装、指定某个版本、回滚、卸载都收在下面的「更多安装选项」里。'}
+            </div>
+          </div>
+          <div className="fg-version-action">
+            <Btn
+              variant={updateAvailable || notInstalled ? 'primary' : 'default'}
+              disabled={busy || !catalogLoaded}
+              onClick={() => {
+                if (notInstalled || updateAvailable) {
+                  service.install(null, allowUnverified, false)
+                  return
+                }
+                catalog.reload()
+              }}
+            >
+              {busy ? '正在执行…' : actionLabel}
+            </Btn>
+          </div>
         </div>
-      </Card>
 
-      <Card title="控制">
-        <div className="fg-actions" style={{ marginTop: 0 }}>
-          <Btn disabled={busy} onClick={() => action.run('start', () => post('/service/start'))}>
-            启动
-          </Btn>
-          <Btn variant="danger" disabled={busy} onClick={() => action.run('stop', () => post('/service/stop'))}>
-            停止
-          </Btn>
-          <Btn disabled={busy} onClick={() => action.run('restart', () => post('/service/restart'))}>
-            重启
-          </Btn>
-        </div>
-        <dl className="fg-grid" style={{ marginTop: 10 }}>
-          <dt>进程号</dt>
-          <dd className="fg-mono">{status.pid ?? '—'}</dd>
-          <dt>监听端口</dt>
-          <dd className="fg-mono">
-            {status.port}
-            {status.effectivePort === null || status.effectivePort === status.port ? '' : `（实际 ${status.effectivePort}）`}
-          </dd>
-          <dt>运行时长</dt>
-          <dd>{formatDuration(status.uptimeMs) || '—'}</dd>
-          <dt>本次会话重启</dt>
-          <dd>{status.restarts === 0 ? '无' : `${status.restarts} 次`}</dd>
-        </dl>
-        {job.data?.job === null || job.data === null ? null : (
+        {service.error === null ? null : (
           <div style={{ marginTop: 10 }}>
-            <JobProgress job={job.data.job} busy={job.data.busy} onCancel={() => action.run('cancel', () => post('/jobs/cancel'))} />
+            <ErrorCard raw={service.error} conclusion="服务操作未完成" onDismiss={service.clearError} />
           </div>
         )}
+
+        <details className="fg-fold">
+          <summary>更多安装选项（指定版本、允许无校验值、回滚）</summary>
+          <div className="fg-hint">
+            上游各平台的发布节奏不一致，所以某些平台上「最新」并不是全部版本；这里列出的都是本机平台真实存在的版本。
+          </div>
+          <div className="fg-field">
+            <label htmlFor="fg-version">要安装的版本</label>
+            <select
+              id="fg-version"
+              className="fg-input"
+              value={version}
+              onChange={(event) => setVersion(event.target.value)}
+            >
+              <option value="">推荐版本{recommended === null ? '' : ` v${recommended}`}</option>
+              {versions.map((entry) => (
+                <option key={entry.version} value={entry.version}>
+                  {entry.version}
+                  {entry.installed ? '（已下载）' : ''}
+                  {entry.unverified ? '（无校验值）' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <label className="fg-check">
+            <input type="checkbox" checked={allowUnverified} onChange={(event) => setAllowUnverified(event.target.checked)} />
+            <span>
+              允许安装没有校验值的版本
+              <div className="fg-hint">默认拒绝。只有你确认来源可信时才开启；开启后这类包不做完整性校验。</div>
+            </span>
+          </label>
+          <div className="fg-actions">
+            <Btn
+              disabled={busy || versions.length === 0}
+              onClick={() => service.install(version === '' ? null : version, allowUnverified, version !== '' && version === status.currentVersion)}
+            >
+              {version === ''
+                ? '安装推荐版本'
+                : version === status.currentVersion
+                  ? `重新安装 v${version}`
+                  : `安装 v${version}`}
+            </Btn>
+            {status.lastKnownGood === null || status.lastKnownGood === status.currentVersion ? null : (
+              <Btn disabled={busy} onClick={() => service.rollback(status.lastKnownGood as string)}>
+                回滚到 v{status.lastKnownGood}
+              </Btn>
+            )}
+            {notInstalled ? null : (
+              <Btn disabled={busy} onClick={() => service.install(status.currentVersion, allowUnverified, true)}>
+                重新安装 v{status.currentVersion}
+              </Btn>
+            )}
+            <Btn variant="ghost" onClick={catalog.reload}>
+              重新读取清单
+            </Btn>
+          </div>
+          <dl className="fg-grid">
+            <dt>已下载版本</dt>
+            <dd className="fg-mono">{installed.length === 0 ? '无' : installed.join('、')}</dd>
+            <dt>上一可用</dt>
+            <dd className="fg-mono">{status.lastKnownGood ?? '无'}</dd>
+            <dt>兼容区间</dt>
+            <dd className="fg-mono">
+              ≥ {status.manifest.minSupportedServer}
+              {status.manifest.maxTestedServer === null ? '' : ` · 已测至 ${status.manifest.maxTestedServer}`}
+            </dd>
+          </dl>
+        </details>
       </Card>
 
-      <Card title="卸载">
-        <div className="fg-hint">
-          卸载会停止后台服务并删除已安装的版本目录。<strong>data/ 目录默认保留</strong>——设备标识、授权码与各平台登录 token 都在那里，删除后需要重新登录、并可能重新消耗试用期。
-        </div>
+      <Card title="运行状态" sub="启动 / 停止 / 重启只影响后台服务，不会动平台账号与授权。">
+        {notInstalled ? null : <ServiceStatusLine status={status} withPid />}
+        {status.circuitOpen ? (
+          <div className="fg-hint fg-state-bad">
+            已停止自动重启。修好原因后点「重启服务」，或到上面「更多安装选项」里回滚上一版本。
+          </div>
+        ) : null}
         <div className="fg-actions">
-          {confirmUninstall ? (
-            <>
-              <Btn
-                variant="danger"
-                disabled={busy}
-                onClick={() => {
-                  setConfirmUninstall(false)
-                  action.run('uninstall', () => post('/install/uninstall', { purgeData: false }))
-                }}
-              >
-                确认卸载（保留数据）
-              </Btn>
-              <Btn
-                variant="danger"
-                disabled={busy}
-                onClick={() => {
-                  setConfirmUninstall(false)
-                  action.run('uninstall', () => post('/install/uninstall', { purgeData: true }))
-                }}
-              >
-                确认卸载并删除数据
-              </Btn>
-              <Btn variant="ghost" onClick={() => setConfirmUninstall(false)}>
-                取消
-              </Btn>
-            </>
+          {notInstalled ? (
+            <span className="fg-hint">装好后台服务后，这里会出现「启动服务 / 停止服务 / 重启服务」。</span>
           ) : (
-            <Btn variant="danger" disabled={busy} onClick={() => setConfirmUninstall(true)}>
-              卸载后台服务
-            </Btn>
+            <>
+              {status.healthy ? (
+                <>
+                  <Btn disabled={busy} onClick={service.restart}>
+                    重启服务
+                  </Btn>
+                  <Btn variant="danger" disabled={busy} onClick={service.stop}>
+                    停止服务
+                  </Btn>
+                </>
+              ) : (
+                <>
+                  <Btn variant="primary" disabled={busy} onClick={service.start}>
+                    启动服务
+                  </Btn>
+                  <Btn disabled={busy} onClick={service.restart}>
+                    重启服务
+                  </Btn>
+                </>
+              )}
+            </>
           )}
         </div>
+        {status.effectivePort !== null && status.effectivePort !== status.port ? (
+          <div className="fg-hint">
+            配置端口 {status.port} 当时被占用，实际监听 {status.effectivePort}；端口在「设置」里改。
+          </div>
+        ) : null}
+      </Card>
+
+      <Card title="卸载" sub="不可逆操作，放在最后，避免误点。">
+        <details className="fg-fold" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }}>
+          <summary>我要卸载后台服务</summary>
+          <div className="fg-hint">
+            卸载会停止服务并删除已下载的版本目录。<strong>data/ 目录默认保留</strong>——设备标识、授权码与各平台登录 token 都在那里，删掉就要重新登录、并可能重新消耗试用期。
+          </div>
+          <div className="fg-actions">
+            {confirmUninstall ? (
+              <>
+                <Btn
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmUninstall(false)
+                    service.uninstall(false)
+                  }}
+                >
+                  确认卸载（保留数据）
+                </Btn>
+                <Btn
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmUninstall(false)
+                    service.uninstall(true)
+                  }}
+                >
+                  确认卸载并删除数据
+                </Btn>
+                <Btn variant="ghost" onClick={() => setConfirmUninstall(false)}>
+                  取消
+                </Btn>
+              </>
+            ) : (
+              <Btn variant="danger" disabled={busy || notInstalled} onClick={() => setConfirmUninstall(true)}>
+                卸载后台服务
+              </Btn>
+            )}
+          </div>
+        </details>
       </Card>
     </div>
   )
@@ -712,6 +898,21 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
     if (license?.subscriptionActive === false) return { text: '免费', cls: '' }
     return { text: '免费', cls: '' }
   })()
+  /**
+   * 免费版：免费版没有订阅，也就没有「到期」这件事 —— 写"无限期"而不是留一个
+   * 空破折号，或者像以前那样把子进程的空字符串拼成 `— · 还剩 0 天`。
+   */
+  const freeEdition = edition === null || edition === 'free'
+  const subscriptionText =
+    license?.subscriptionExpiresAt ?? (freeEdition ? '无限期（免费版）' : '—')
+  const graceText = ((): string => {
+    const expires = license?.gracePeriodExpiresAt ?? null
+    if (expires !== null) {
+      const days = license?.graceRemainingDays
+      return days === null || days === undefined ? `${expires}（已到期）` : `${expires} · 还剩 ${days} 天`
+    }
+    return freeEdition ? '无限期（免费版不涉及）' : '—'
+  })()
 
   return (
     <div className="fg-root">
@@ -724,31 +925,19 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
         </Card>
       ) : null}
 
-      <Card title={<span>授权状态 <span className={`fg-tag ${editionTag.cls}`}>{editionTag.text}</span></span>}>
+      <Card
+        title={<span>授权状态 <span className={`fg-tag ${editionTag.cls}`}>{editionTag.text}</span></span>}
+        sub="授权决定「免费版能用哪些平台」，和「账号总览」里的登录状态是两件事。"
+      >
         <dl className="fg-grid">
           <dt>授权码</dt>
           <dd className="fg-mono">{license?.keyMasked === null || license?.keyMasked === '' ? '未填写' : license?.keyMasked}</dd>
+          <dt>订阅到期</dt>
+          <dd>{subscriptionText}</dd>
+          <dt>宽限期</dt>
+          <dd>{graceText}</dd>
           <dt>产品</dt>
           <dd>{license?.product ?? info?.license.product ?? '—'}</dd>
-          <dt>设备标识</dt>
-          <dd>
-            <span className="fg-mono">{license?.deviceId ?? info?.deviceId ?? '—'}</span>{' '}
-            {license?.deviceId === null || license?.deviceId === undefined ? null : <Copy value={license.deviceId} />}
-          </dd>
-          <dt>订阅到期</dt>
-          <dd>{license?.subscriptionExpiresAt ?? '—（永久或未订阅）'}</dd>
-          <dt>宽限期</dt>
-          <dd>
-            {license?.gracePeriodExpiresAt ?? '—'}
-            {license?.graceRemainingDays === null || license?.graceRemainingDays === undefined
-              ? ''
-              : ` · 还剩 ${license.graceRemainingDays} 天`}
-          </dd>
-          <dt>云端规则</dt>
-          <dd>
-            {license?.capabilitiesLoaded === true ? '已同步' : '未同步（显示为本地默认规则）'}
-            {license?.capabilitiesMessage === null || license?.capabilitiesMessage === undefined ? '' : ` · ${license.capabilitiesMessage}`}
-          </dd>
         </dl>
         <div className="fg-field">
           <label htmlFor="fg-license">输入授权码</label>
@@ -759,6 +948,7 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
             value={key}
             onChange={(event) => setKey(event.target.value)}
           />
+          <div className="fg-hint">格式 FG-XXXX-XXXX-XXXX。授权码一码一机，激活后不能转移到另一台设备。</div>
         </div>
         <div className="fg-actions">
           <Btn
@@ -771,7 +961,7 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
               })
             }
           >
-            写入并激活
+            {busy ? '正在激活…' : '写入并激活'}
           </Btn>
           {confirmClear ? (
             <>
@@ -783,35 +973,54 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
               </Btn>
             </>
           ) : (
-            <Btn variant="danger" disabled={busy} onClick={() => setConfirmClear(true)}>
+            <Btn
+              variant="danger"
+              disabled={busy || (license?.keyMasked ?? '') === ''}
+              onClick={() => setConfirmClear(true)}
+            >
               解除授权
             </Btn>
           )}
         </div>
+        <details className="fg-fold">
+          <summary>设备标识与云端规则（排障用）</summary>
+          <dl className="fg-grid">
+            <dt>设备标识</dt>
+            <dd>
+              <span className="fg-mono">{license?.deviceId ?? info?.deviceId ?? '—'}</span>{' '}
+              {license?.deviceId === null || license?.deviceId === undefined ? null : <Copy value={license.deviceId} />}
+            </dd>
+            <dt>云端规则</dt>
+            <dd>{license?.capabilitiesLoaded === true ? '已同步' : '未同步（显示为本地默认规则）'}</dd>
+          </dl>
+          <div className="fg-hint">设备标识绑定授权与试用期，请勿删除插件数据目录。</div>
+        </details>
       </Card>
 
-      <Card title="平台能力">
-        <div className="fg-hint">
-          这一栏是<strong>授权</strong>能覆盖哪些平台、各自试用还剩多久，由服务端下发的规则决定；它不是登录状态（登录状态见「账号总览」）。
-        </div>
+      <Card
+        title="平台能力"
+        sub={(license?.capabilitiesMessage ?? null) ?? '这一栏由服务端下发的规则决定，和账号登录状态无关。'}
+      >
         {(license?.platforms ?? []).length === 0 ? (
           <div className="fg-empty">尚未拿到平台能力列表。</div>
         ) : (
-          (license?.platforms ?? []).map((entry) => (
-            <Row
-              key={entry.platform}
-              main={entry.platform}
-              sub={entry.message ?? undefined}
-              right={
-                <span className={`fg-tag ${entry.enabled ? 'fg-tag-ok' : 'fg-tag-warn'}`}>
-                  {entry.enabled ? '可用' : '不可用'}
-                  {entry.trialRemainingDays === null || entry.trialRemainingDays === undefined
-                    ? ''
-                    : ` · 试用剩 ${entry.trialRemainingDays} 天`}
-                </span>
-              }
-            />
-          ))
+          (license?.platforms ?? []).map((entry) => {
+            // 0 天 = 该平台没有试用期（米家就是永久免费），不该写成"试用剩 0 天"。
+            const trial = entry.trialRemainingDays
+            return (
+              <Row
+                key={entry.platform}
+                main={entry.platform}
+                sub={entry.message ?? undefined}
+                right={
+                  <span className={`fg-tag ${entry.enabled ? 'fg-tag-ok' : 'fg-tag-warn'}`}>
+                    {entry.enabled ? '可用' : '不可用'}
+                    {trial === null || trial === undefined || trial <= 0 ? '' : ` · 试用剩 ${trial} 天`}
+                  </span>
+                }
+              />
+            )
+          })
         )}
       </Card>
     </div>
@@ -819,6 +1028,7 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
 }
 
 function AccountsPanel(props: { status: RuntimeStatus }): React.ReactElement {
+  void props.status
   const overview = usePoll<{
     platforms: PlatformAccount[]
     cameras: Array<{ deviceId: string; name: string; online: boolean }>
@@ -829,12 +1039,9 @@ function AccountsPanel(props: { status: RuntimeStatus }): React.ReactElement {
   const data = overview.data
   return (
     <div className="fg-root">
-      <Card title="平台账号">
-        <div className="fg-hint">
-          这一栏是<strong>登录</strong>状态。登录动作在「<strong>平台登录</strong>」标签里完成（也可以继续在聊天里让模型调用工具）。
-        </div>
+      <Card title="平台账号" sub="只读总览。要登录或退出，请切到「平台登录」。">
         {data === null || data.reachable === false ? (
-          <div className="fg-empty">后台服务未运行，无法读取平台登录状态。</div>
+          <div className="fg-empty">后台服务未运行，无法读取平台登录状态。先在「服务」页把服务启动起来。</div>
         ) : data.platforms.length === 0 ? (
           <div className="fg-empty">服务端未返回平台列表。</div>
         ) : (
@@ -856,7 +1063,7 @@ function AccountsPanel(props: { status: RuntimeStatus }): React.ReactElement {
         )}
       </Card>
 
-      <Card title="摄像头">
+      <Card title="摄像头" sub="摄像头画面与取流仍在聊天里让模型调用工具（xiaomi/camera_*），这里只显示有没有。">
         {data?.cameraSupported === false ? (
           <div className="fg-hint">
             当前平台的上游构建不包含摄像头能力（Windows 版本编译时关闭了取流），因此这里不会有摄像头。其它平台功能不受影响。
@@ -1531,7 +1738,7 @@ function LoginPanel(props: { status: RuntimeStatus; reload: () => void }): React
     return (
       <div className="fg-root">
         <Card title="平台登录">
-          <div className="fg-empty">后台服务未运行：请先在「服务」标签里安装并启动，再回到这里登录。</div>
+          <div className="fg-empty">后台服务未运行：请先在「服务」页安装并启动它，再回到这里登录。</div>
         </Card>
       </div>
     )
@@ -1539,11 +1746,23 @@ function LoginPanel(props: { status: RuntimeStatus; reload: () => void }): React
 
   return (
     <div className="fg-root">
-      <Card title="从这里登录">
+      <Card
+        title="从这里登录"
+        sub="账号密码 / 验证码只在本机回环内交给后台服务，插件不保存、不写日志、不回显；退出登录会清掉服务里的令牌。"
+      >
         <div className="fg-hint">
-          账号密码 / 验证码只在本机回环内交给后台服务进程，<strong>插件不保存、不写日志、不回显</strong>；退出登录会清掉后台服务里的令牌。
-          「账号总览」标签只显示状态，登录动作都在这里完成。
+          <strong>登录只是第一步。</strong>登录后设备控制、场景、记忆、技能、触发规则、Vision AI 都在<strong>聊天里</strong>让模型调用工具完成，例如：
         </div>
+        <dl className="fg-grid">
+          <dt>设备</dt>
+          <dd>「帮我把客厅灯打开」「空调调到 26 度」</dd>
+          <dt>摄像头</dt>
+          <dd>「看看客厅现在有人吗」「米家摄像头连一下」</dd>
+          <dt>场景与定时</dt>
+          <dd>「执行回家场景」「明早 7 点叫我」</dd>
+          <dt>自动化</dt>
+          <dd>「检测到有人进客厅就开灯」（摄像头触发规则）</dd>
+        </dl>
       </Card>
       <XiaomiLogin tools={tools} account={accountOf('xiaomi')} reload={reload} />
       <TuyaLogin tools={tools} account={accountOf('tuya')} reload={reload} />
@@ -1581,13 +1800,17 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
 
   const patch = (next: Partial<PluginSettings>): void => setDraft({ ...value, ...next })
   const dirty = current !== null && JSON.stringify(current) !== JSON.stringify(value)
+  // 端口 / 监听地址写进 config.yaml，只有重启后台服务才会生效；其余字段立即写入。
+  // 按钮文案如实说出这件事，省得改完端口发现没变。
+  const needsRestart =
+    current !== null && (current.serverPort !== value.serverPort || current.bindAddress !== value.bindAddress)
 
   return (
     <div className="fg-root">
       {action.error === null ? null : <ErrorCard raw={action.error} conclusion="设置未保存" onDismiss={action.clearError} />}
       {note === null ? null : <div className="fg-card fg-hint">{note}</div>}
 
-      <Card title="后台服务">
+      <Card title="后台服务" sub="保存后写入配置；改了端口或监听地址，要重启后台服务才生效。">
         <div className="fg-field">
           <label htmlFor="fg-server-port">后台服务端口</label>
           <input
@@ -1613,12 +1836,12 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
           <input type="checkbox" checked={value.autoStart} onChange={(event) => patch({ autoStart: event.target.checked })} />
           <span>
             随 DSH 启动时自动启动后台服务
-            <div className="fg-hint">关闭后，DSH 启动不会拉起服务，需要在这里手动点「启动」。</div>
+            <div className="fg-hint">关闭后，DSH 启动不会拉起服务，需要到「服务」页手动点「启动服务」。</div>
           </span>
         </label>
       </Card>
 
-      <Card title="下载来源">
+      <Card title="下载来源" sub="默认走官方发布渠道；只有网络不通或离线安装时才需要改这里。">
         <div className="fg-field">
           <label htmlFor="fg-mirror">镜像地址前缀</label>
           <input
@@ -1639,7 +1862,7 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
             value={value.localArchive ?? ''}
             onChange={(event) => patch({ localArchive: event.target.value === '' ? null : event.target.value })}
           />
-          <div className="fg-hint">最后兜底的来源。请优先使用「服务」页的指定版本安装，避免手填路径。</div>
+          <div className="fg-hint">最后兜底的来源。一般不需要：安装某个具体版本请用「服务」页的「更多安装选项」。</div>
         </div>
         <label className="fg-check">
           <input type="checkbox" checked={value.allowUnverified} onChange={(event) => patch({ allowUnverified: event.target.checked })} />
@@ -1703,7 +1926,7 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
           }) })
           setNote(result.note)
         })}>
-          保存设置
+          {action.busy === null ? (dirty && needsRestart ? '保存（改端口需重启服务）' : '保存设置') : '正在保存…'}
         </Btn>
         <Btn variant="ghost" disabled={!dirty} onClick={() => setDraft(current)}>
           放弃修改
@@ -1750,14 +1973,8 @@ function LogsPanel(): React.ReactElement {
     <div className="fg-root">
       {error === null ? null : <ErrorCard raw={error} conclusion="读取日志失败" />}
       <Card
-        title={
-          <span>
-            运行日志
-            <span className="fg-hint" style={{ fontWeight: 400 }}>
-              （插件与后台服务合并在一处，便于看因果顺序）
-            </span>
-          </span>
-        }
+        title="运行日志"
+        sub="插件与后台服务的日志合并在一处，便于看清因果顺序；贴给开发者排障时用「复制全部」。"
       >
         <div className="fg-actions" style={{ marginTop: 0 }}>
           <select className="fg-input" style={{ width: 'auto' }} value={source} onChange={(event) => setSource(event.target.value as typeof source)}>
@@ -1794,9 +2011,51 @@ function LogsPanel(): React.ReactElement {
 function FeyagateSettings(): React.ReactElement {
   const [tab, setTab] = useState<TabId>('service')
   const status = usePoll<RuntimeStatus>('/status', 2500)
+  // 顶部状态条要显示「几个平台已登录 / 试用还剩几天」，所以这里也订阅账号总览。
+  // 服务没起来时后端会立刻返回 reachable:false，轮询代价很小。
+  const overview = usePoll<{
+    platforms: PlatformAccount[]
+    license: LicenseView | null
+    reachable: boolean
+  }>('/account/overview', 15_000)
 
   const reload = status.reload
   const current = status.data
+
+  // 所有服务写操作都从这里发出：顶部状态条和「服务」页调的是同一段逻辑，
+  // 不会出现两个入口说法不一致、或者同一时刻点出两个任务。
+  const action = useAction(reload)
+  const busy = action.busy !== null
+
+  const wrap = useCallback(
+    (label: string, run: () => Promise<unknown>) => {
+      action.run(label, () => run().finally(reload))
+    },
+    [action, reload],
+  )
+
+  const install = useCallback(
+    (target: string | null, allowUnverified: boolean, reinstall: boolean): void => {
+      wrap('install', () => post('/install', { version: target, allowUnverified, reinstall }))
+    },
+    [wrap],
+  )
+
+  const service = useMemo<ServiceAction>(
+    () => ({
+      busy,
+      error: action.error,
+      clearError: action.clearError,
+      install,
+      rollback: (target) => wrap('rollback', () => post('/install/rollback', { version: target })),
+      start: () => wrap('start', () => post('/service/start')),
+      stop: () => wrap('stop', () => post('/service/stop')),
+      restart: () => wrap('restart', () => post('/service/restart')),
+      cancel: () => wrap('cancel', () => post('/jobs/cancel')),
+      uninstall: (purgeData) => wrap('uninstall', () => post('/install/uninstall', { purgeData })),
+    }),
+    [action.clearError, action.error, busy, install, wrap],
+  )
 
   if (current === null) {
     return (
@@ -1810,70 +2069,86 @@ function FeyagateSettings(): React.ReactElement {
     )
   }
 
-  const view = stateView(current)
+  const active = TABS.find((entry) => entry.id === tab) ?? TABS[0]
+  const accounts = overview.data?.platforms ?? []
+  const reachable = overview.data?.reachable === true
+  const signedIn = accounts.filter((entry) => entry.authenticated).length
+  const license = overview.data?.license ?? null
+  const trialDays = license?.platforms.reduce<number | null>((lowest, platform) => {
+    const days = platform.trialRemainingDays
+    if (days === null || days === undefined) return lowest
+    return lowest === null ? days : Math.min(lowest, days)
+  }, null)
+
+  /**
+   * 状态条右侧永远只放「现在该做的那一件事」：没装 → 安装，没在跑 → 启动，
+   * 一切正常 → 不放按钮（健康时推进日志页属于噪音，日志自己是一个分区）。
+   */
   const primary = ((): { label: string; onClick: () => void } | null => {
     if (current.state === 'not-installed') {
-      return {
-        label: '安装后台服务',
-        onClick: () => {
-          setTab('service')
-          void post('/install', {}).then(reload).catch(() => reload())
-        },
-      }
+      return { label: '安装后台服务', onClick: () => install(null, false, false) }
     }
-    if (current.healthy) return { label: '查看日志', onClick: () => setTab('logs') }
     if (current.state === 'stopped' || current.state === 'error' || current.state === 'degraded') {
-      return {
-        label: '启动',
-        onClick: () => {
-          void post('/service/start').then(reload).catch(() => reload())
-        },
-      }
+      return { label: '启动服务', onClick: () => service.start() }
     }
     return null
   })()
 
   return (
     <div className="fg-root">
-      <div className="fg-card">
-        <div className="fg-hero">
-          <div className="fg-hero-main">
-            <div className={`fg-hero-state ${TONE_CLASS[view.tone]}`}>
-              <span aria-hidden="true">{view.icon}</span>
-              <span>{view.word}</span>
-              {current.currentVersion === null ? null : <span className="fg-tag">v{current.currentVersion}</span>}
-            </div>
-            <div className="fg-hero-detail">{current.detail ?? `后台服务正在监听 127.0.0.1:${current.effectivePort ?? current.port}`}</div>
-            {current.circuitOpen ? (
-              <div className="fg-hero-detail fg-state-bad">已停止自动重启。修复原因后点「重启」或「回滚上一版本」可立即恢复。</div>
-            ) : null}
+      <div className="fg-statusbar">
+        <div className="fg-statusbar-main">
+          <ServiceStatusLine status={current} />
+          <div className="fg-strip">
+            <span>{reachable ? `${signedIn}/${accounts.length} 个平台已登录` : '平台状态未同步'}</span>
+            {trialDays === null ? null : (
+              <>
+                <span>·</span>
+                <span>免费试用还剩 {trialDays} 天</span>
+              </>
+            )}
+            {current.facadePort === null || current.facadePort === undefined ? null : (
+              <>
+                <span>·</span>
+                <span>MCP 门面端口 {current.facadePort}</span>
+              </>
+            )}
           </div>
-          {primary === null ? null : (
-            <Btn variant="primary" onClick={primary.onClick}>
-              {primary.label}
-            </Btn>
-          )}
+          {current.circuitOpen ? (
+            <div className="fg-statusbar-detail fg-state-bad">已停止自动重启：修好原因后点「重启服务」，或回滚上一版本。</div>
+          ) : null}
         </div>
+        {primary === null ? null : (
+          <div className="fg-statusbar-actions">
+            <Btn variant="primary" disabled={busy} onClick={primary.onClick}>
+              {busy ? '正在执行…' : primary.label}
+            </Btn>
+          </div>
+        )}
       </div>
 
+      {action.error === null ? null : <ErrorCard raw={action.error} conclusion="服务操作未完成" onDismiss={action.clearError} />}
       {status.error === null ? null : <ErrorCard raw={status.error} conclusion="状态刷新失败" />}
 
-      <div className="fg-tabs" role="tablist">
-        {TABS.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            role="tab"
-            className="fg-tab"
-            aria-selected={tab === entry.id}
-            onClick={() => setTab(entry.id)}
-          >
-            {entry.label}
-          </button>
-        ))}
+      <div className="fg-nav">
+        <div className="fg-nav-items" role="tablist">
+          {TABS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              className="fg-nav-item"
+              aria-selected={tab === entry.id}
+              onClick={() => setTab(entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+        <div className="fg-blurb">{active.blurb}</div>
       </div>
 
-      {tab === 'service' ? <ServicePanel status={current} reload={reload} /> : null}
+      {tab === 'service' ? <ServicePanel status={current} service={service} /> : null}
       {tab === 'license' ? <LicensePanel status={current} reload={reload} /> : null}
       {tab === 'accounts' ? <AccountsPanel status={current} /> : null}
       {tab === 'login' ? <LoginPanel status={current} reload={reload} /> : null}

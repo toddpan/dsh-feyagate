@@ -44,6 +44,26 @@ function bool(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null
 }
 
+/**
+ * License field that is *absent* when it does not apply.
+ *
+ * The child signals "no subscription / no grace period" with an empty string
+ * rather than omitting the key, so a plain `str()` would hand the UI `''` —
+ * which `??` does not catch, and which rendered as a bare `— · 还剩 0 天` on a
+ * free edition. Empty means absent.
+ */
+function optionalStr(value: unknown): string | null {
+  const text = str(value)
+  return text === '' ? null : text
+}
+
+/** Grace window that has not started yet: no start, no expiry, nothing remaining. */
+function graceRemainingDays(capabilities: Record<string, unknown>): number | null {
+  if (optionalStr(capabilities.grace_period_expires_at) === null) return null
+  const days = num(capabilities.grace_period_remaining)
+  return days === null ? null : Math.max(0, Math.round(days))
+}
+
 export interface ChildApiOptions {
   /** Current child port, or null when it is not running. */
   port: () => number | null
@@ -141,10 +161,10 @@ export class ChildApi {
       capabilitiesLoaded: capabilities.loaded === true,
       capabilitiesMessage: str(capabilities.message),
       subscriptionActive: bool(capabilities.is_subscription_active),
-      subscriptionExpiresAt: str(capabilities.subscription_expires_at),
-      gracePeriodStartAt: str(capabilities.grace_period_start_at),
-      gracePeriodExpiresAt: str(capabilities.grace_period_expires_at),
-      graceRemainingDays: num(capabilities.grace_period_remaining),
+      subscriptionExpiresAt: optionalStr(capabilities.subscription_expires_at),
+      gracePeriodStartAt: optionalStr(capabilities.grace_period_start_at),
+      gracePeriodExpiresAt: optionalStr(capabilities.grace_period_expires_at),
+      graceRemainingDays: graceRemainingDays(capabilities),
       features: asRecord(capabilities.features),
       platforms,
       raw: data,

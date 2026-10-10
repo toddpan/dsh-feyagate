@@ -26,7 +26,7 @@
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = join(fileURLToPath(import.meta.url), '..', '..')
 const argv = process.argv.slice(2)
@@ -97,7 +97,11 @@ mkdirSync(smokeRoot, { recursive: true })
 
 // ────────────────────────────────────────────────────────── 1. apply()
 
-const { apply } = await import(join(projectRoot, 'lib', 'index.js'))
+const { apply } = await import(pathToFileURL(join(projectRoot, 'lib', 'index.js')).href)
+// 期望的平台标签必须按当前机器算出来：写死 'mac-arm64' 会让这个断言在 macOS 以外的
+// 机器上必然失败（Windows 上跑 npm test 一直是红的）。
+const { detectPlatformTag } = await import(pathToFileURL(join(projectRoot, 'lib', 'util', 'platform.js')).href)
+const expectedPlatform = detectPlatformTag() ?? 'unknown'
 
 const started = Date.now()
 await apply(ctx, { installRoot: smokeRoot })
@@ -165,7 +169,7 @@ const apiPort = apiServer.address().port
 const apiBase = `http://127.0.0.1:${apiPort}/dsh-feyagate`
 
 const health = await fetchJson(`${apiBase}/health`)
-check('GET /health 返回插件与平台信息', health.body?.ok === true && health.body.data.platform === 'mac-arm64', JSON.stringify(health.body?.data ?? health.body))
+check('GET /health 返回插件与平台信息', health.body?.ok === true && health.body.data.platform === expectedPlatform, JSON.stringify(health.body?.data ?? health.body))
 
 const status = await fetchJson(`${apiBase}/status`)
 check('GET /status 报告未安装', status.body?.ok === true && status.body.data.state === 'not-installed', JSON.stringify(status.body?.data?.state))

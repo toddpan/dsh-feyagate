@@ -11,8 +11,35 @@ export const PLUGIN_ID = 'dsh-feyagate'
 /** Short name used for directory names, log prefixes, and DOM ids. */
 export const PLUGIN_SHORT = 'dsh-feyagate'
 
+/**
+ * Project home on GitHub — the settings page's "GitHub 仓库" entry links here.
+ * Kept next to the identity constants because package.json's `repository` must
+ * agree with it; if the repo ever moves, this is the one place to change.
+ */
+export const GITHUB_REPO_URL = 'https://github.com/toddpan/dsh-feyagate'
+
+/** GitHub issue tracker — the settings page's "问题反馈" entry lands here. */
+export const GITHUB_ISSUES_URL = `${GITHUB_REPO_URL}/issues`
+
+/**
+ * The open API reference shipped in this repo, as rendered on GitHub. The
+ * settings page's 「开放接口」 tab links here instead of embedding the full
+ * document, so there is exactly one copy of the reference to keep current.
+ */
+export const GITHUB_API_DOC_URL = `${GITHUB_REPO_URL}/blob/main/docs/api.zh.md`
+
 /** `serverName` of the MCP bridge row; makes tool names `mcp__feyagate__*`. */
 export const MCP_SERVER_NAME = 'feyagate'
+
+/**
+ * User-facing product name for the child process (`miloco-mcp-server`).
+ *
+ * The binary and release-asset names are an upstream implementation detail;
+ * UI copy must present the engine by this name instead, so a user never has
+ * to learn the word "miloco" to use the product. File-name examples (mirror
+ * hints, local-archive placeholders) stay factual — they name real downloads.
+ */
+export const ENGINE_DISPLAY_NAME = 'FeyaGate MCP 引擎'
 
 /** Settings namespace and the id of the settings.section registered by the UI. */
 export const SETTINGS_NS = 'feyagate'
@@ -115,6 +142,9 @@ export const DEFAULT_WS_PORT = 8765
 /** API prefix of the child server, taken from the manifest at runtime too. */
 export const SERVER_HEALTH_PATH = '/health'
 export const SERVER_MCP_PATH = '/mcp/http'
+
+/** Path the MCP facade serves (Streamable HTTP); `/mcp/http` is accepted too. */
+export const FACADE_MCP_PATH = '/mcp'
 
 /** License-tier wording is owned by the child process; we only display it. */
 export const LICENSE_SERVICE_URL = 'https://www.feyagate.com/api/v1/device'

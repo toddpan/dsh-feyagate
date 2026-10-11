@@ -1,7 +1,7 @@
 /**
  * Feyagate 网关 — 设置界面的浏览器半侧。
  *
- * 一个 `settings.section` 页面，六个 tab：服务 / 授权 / 账号总览 / 平台登录 / 设置 / 日志。
+ * 一个 `settings.section` 页面，七个 tab：服务 / 平台登录 / 账号总览 / 授权 / 设置 / 开放接口 / 日志。
  *
  * 三条约束决定了这里怎么写：
  *
@@ -19,6 +19,10 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+// 纯常量模块（无任何 node 依赖），tsdown 会把它打进 bundle；GitHub 地址只在这里
+// 定义一次（src/constants.ts），浏览器半侧与宿主半侧不会各自漂移。
+import { ENGINE_DISPLAY_NAME, FACADE_MCP_PATH, GITHUB_API_DOC_URL, GITHUB_ISSUES_URL, GITHUB_REPO_URL } from '../constants.js'
 
 import type {
   ApiEnvelope,
@@ -61,7 +65,7 @@ function withApiPrefix(path: string): string {
 }
 
 /**
- * 六个分区的导航。`blurb` 是每个分区自己的一句话职责 —— tab 上只放 2 个字的短
+ * 七个分区的导航。`blurb` 是每个分区自己的一句话职责 —— tab 上只放 2-4 个字的短
  * 标签，长解释放到内容区顶部，避免用户先在标签栏里做阅读理解。
  */
 const TABS = [
@@ -70,6 +74,7 @@ const TABS = [
   { id: 'accounts', label: '账号总览', blurb: '只看状态：哪个平台登录还在、掉了没有（不改任何东西）' },
   { id: 'license', label: '授权', blurb: '免费版能用哪些平台、授权码怎么填、试用还剩多久' },
   { id: 'settings', label: '设置', blurb: '端口、监听地址、下载镜像、开机自启等插件本身的选项' },
+  { id: 'openapi', label: '开放接口', blurb: '网关的 MCP 与 HTTP 接口：把设备能力接入其它 AI 客户端和你自己的程序' },
   { id: 'logs', label: '日志', blurb: '插件与后台服务合并的运行日志，出问题时把这段发给开发者' },
 ] as const
 
@@ -562,7 +567,7 @@ function ServiceStatusLine(props: { status: RuntimeStatus; withPid?: boolean }):
   const view = stateView(status)
   const parts: string[] = []
   if (status.state === 'not-installed') {
-    parts.push('还没有下载后台服务')
+    parts.push(`还没有下载 ${ENGINE_DISPLAY_NAME}`)
   } else if (status.healthy) {
     parts.push(`端口 ${status.effectivePort ?? status.port}`)
     if (status.uptimeMs !== null) parts.push(`已运行 ${formatDuration(status.uptimeMs)}`)
@@ -666,7 +671,7 @@ function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }):
       <Card
         title={
           <span>
-            版本
+            {ENGINE_DISPLAY_NAME}
             {updateAvailable ? <span className="fg-tag fg-tag-busy">有更新</span> : null}
           </span>
         }
@@ -677,7 +682,7 @@ function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }):
               {notInstalled
                 ? catalogLoaded && recommended !== null
                   ? `尚未安装，推荐安装 v${recommended}`
-                  : '尚未安装后台服务'
+                  : `尚未安装 ${ENGINE_DISPLAY_NAME}`
                 : updateAvailable
                   ? `发现新版本 v${recommended}`
                   : catalogLoaded
@@ -695,7 +700,7 @@ function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }):
             </div>
             <div className="fg-version-note">
               {notInstalled
-                ? '安装会从官方发布渠道下载后台服务，校验通过后才启用；失败不会留下半个版本。'
+                ? `安装会从官方发布渠道下载 ${ENGINE_DISPLAY_NAME}，校验通过后才启用；失败不会留下半个版本。`
                 : '重装、指定某个版本、回滚、卸载都收在下面的「更多安装选项」里。'}
             </div>
           </div>
@@ -791,7 +796,7 @@ function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }):
         </details>
       </Card>
 
-      <Card title="运行状态" sub="启动 / 停止 / 重启只影响后台服务，不会动平台账号与授权。">
+      <Card title="运行状态" sub={`启动 / 停止 / 重启只影响 ${ENGINE_DISPLAY_NAME}，不会动平台账号与授权。`}>
         {notInstalled ? null : <ServiceStatusLine status={status} withPid />}
         {status.circuitOpen ? (
           <div className="fg-hint fg-state-bad">
@@ -800,7 +805,7 @@ function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }):
         ) : null}
         <div className="fg-actions">
           {notInstalled ? (
-            <span className="fg-hint">装好后台服务后，这里会出现「启动服务 / 停止服务 / 重启服务」。</span>
+            <span className="fg-hint">装好 {ENGINE_DISPLAY_NAME} 后，这里会出现「启动服务 / 停止服务 / 重启服务」。</span>
           ) : (
             <>
               {status.healthy ? (
@@ -834,7 +839,7 @@ function ServicePanel(props: { status: RuntimeStatus; service: ServiceAction }):
 
       <Card title="卸载" sub="不可逆操作，放在最后，避免误点。">
         <details className="fg-fold" style={{ marginTop: 0, borderTop: 0, paddingTop: 0 }}>
-          <summary>我要卸载后台服务</summary>
+          <summary>我要卸载 {ENGINE_DISPLAY_NAME}</summary>
           <div className="fg-hint">
             卸载会停止服务并删除已下载的版本目录。<strong>data/ 目录默认保留</strong>——设备标识、授权码与各平台登录 token 都在那里，删掉就要重新登录、并可能重新消耗试用期。
           </div>
@@ -909,7 +914,13 @@ function LicensePanel(props: { status: RuntimeStatus; reload: () => void }): Rea
     const expires = license?.gracePeriodExpiresAt ?? null
     if (expires !== null) {
       const days = license?.graceRemainingDays
-      return days === null || days === undefined ? `${expires}（已到期）` : `${expires} · 还剩 ${days} 天`
+      if (days === null || days === undefined) return `${expires}（已到期）`
+      // 上游把「没有剩余」报成 0：宽限期还挂着但剩余 0 天，要么就是今天到期，
+      // 要么其实已经过了 —— 两种都不能写成「还剩 0 天」。能解析出时间就用时间
+      // 判定，解析不了按已到期兜底（与 days 缺失时的口径一致）。
+      const expiresAt = new Date(expires)
+      if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() < Date.now()) return `${expires}（已到期）`
+      return days === 0 ? `${expires}（今天到期）` : `${expires} · 还剩 ${days} 天`
     }
     return freeEdition ? '无限期（免费版不涉及）' : '—'
   })()
@@ -1102,7 +1113,9 @@ function accountSummary(account: PlatformAccount): string | undefined {
   const region = account.authStatus['cloud_server'] ?? account.authStatus['region']
   const parts = [
     typeof region === 'string' && region !== '' ? `区域 ${region}` : null,
-    typeof remaining === 'number' ? `登录有效期剩 ${formatDuration(remaining * 1000)}` : null,
+    // 上游用 0 表示「剩余未知/已到期」；把 0 排成「登录有效期剩 0 秒」和试用期
+    // 显示 0 天是同一类误导，宁可不显示。
+    typeof remaining === 'number' && remaining > 0 ? `登录有效期剩 ${formatDuration(remaining * 1000)}` : null,
   ].filter((part): part is string => part !== null)
   return parts.length === 0 ? undefined : parts.join(' · ')
 }
@@ -1847,7 +1860,7 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
           <input
             id="fg-mirror"
             className="fg-input fg-mono"
-            placeholder="https://mirror.example.com/miloco"
+            placeholder="https://mirror.example.com/feyagate"
             value={value.mirrorBase ?? ''}
             onChange={(event) => patch({ mirrorBase: event.target.value === '' ? null : event.target.value })}
           />
@@ -1858,7 +1871,7 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
           <input
             id="fg-local"
             className="fg-input fg-mono"
-            placeholder="/Users/you/Downloads/miloco-mcp-server-mac-arm64-v1.2.20.zip"
+            placeholder="/Users/you/Downloads/miloco-mcp-server-mac-arm64-v1.2.21.zip"
             value={value.localArchive ?? ''}
             onChange={(event) => patch({ localArchive: event.target.value === '' ? null : event.target.value })}
           />
@@ -1875,7 +1888,7 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
 
       <Card title="插件">
         <div className="fg-field">
-          <label htmlFor="fg-facade-port">MCP 门面端口</label>
+          <label htmlFor="fg-facade-port">MCP server 端口</label>
           <input
             id="fg-facade-port"
             className="fg-input fg-mono"
@@ -1897,6 +1910,24 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
           </dd>
           <dt>插件版本</dt>
           <dd className="fg-mono">{boot().pluginVersion ?? '—'}</dd>
+          <dt>引擎版本</dt>
+          <dd className="fg-mono">
+            {props.status.currentVersion === null
+              ? `${ENGINE_DISPLAY_NAME}未安装`
+              : `v${props.status.currentVersion}`}
+          </dd>
+          <dt>项目主页</dt>
+          <dd>
+            <a className="fg-link" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
+              {GITHUB_REPO_URL}
+            </a>
+          </dd>
+          <dt>问题反馈</dt>
+          <dd>
+            <a className="fg-link" href={GITHUB_ISSUES_URL} target="_blank" rel="noreferrer">
+              GitHub Issues（提问题 / 查已有问题）
+            </a>
+          </dd>
         </dl>
         {launcher === undefined ? null : (
           <>
@@ -1932,6 +1963,180 @@ function SettingsPanel(props: { status: RuntimeStatus; reload: () => void }): Re
           放弃修改
         </Btn>
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────── 开放接口面板
+//
+// 把网关的两个本机接口面交给第三方：MCP 门面（给 AI 客户端）与后台服务 HTTP
+// （给程序/脚本）。所有地址都按 `RuntimeStatus` 的实时端口拼出——两个端口都可
+// 能因占用漂移，照抄默认端口的接入指南会把人引向不存在的地址。片段与 curl 全部
+// 可复制；完整文档放仓库 docs/api.zh.md（GitHub 渲染），这里只放链接不放全文，
+// 避免同一份参考出现两个会漂移的副本。
+
+/** HTTP 接口卡片里列出的端点。与 `src/child-api.ts` 实际调用的路由一一对应。 */
+interface HttpEndpointInfo {
+  method: 'GET' | 'POST' | 'DELETE'
+  path: string
+  desc: string
+  /** POST 示例的 JSON 请求体；缺省表示无请求体。 */
+  body?: string
+}
+
+const HTTP_ENDPOINTS: HttpEndpointInfo[] = [
+  { method: 'GET', path: '/health', desc: '健康检查：进程活着、MCP 就绪' },
+  { method: 'GET', path: '/api/v1/gateway/info', desc: '网关信息：名称、版本、平台、设备标识、摄像头能力' },
+  { method: 'GET', path: '/api/v1/gateway/license', desc: '授权状态与各平台可用能力（试用期、宽限期）' },
+  { method: 'POST', path: '/api/v1/gateway/license', desc: '写入并激活授权码', body: '{"license_key":"FG-XXXX-XXXX-XXXX"}' },
+  { method: 'DELETE', path: '/api/v1/gateway/license', desc: '清除授权码，恢复免费版' },
+  { method: 'POST', path: '/api/v1/platform/xiaomi/logout', desc: '米家账号退出登录（v1.2.21 起提供）' },
+  { method: 'POST', path: '/mcp/http', desc: 'MCP over HTTP（JSON-RPC：initialize、tools/list、tools/call）', body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' },
+]
+
+/**
+ * 单行 curl。`-d` 里的双引号统一转义——这一串在 POSIX shell 和 Windows CMD
+ * 里都成立，不用给两个平台各写一份。
+ */
+function curlFor(base: string, endpoint: HttpEndpointInfo): string {
+  const parts = [`curl -X ${endpoint.method} "${base}${endpoint.path}"`]
+  if (endpoint.body !== undefined) {
+    parts.push('-H "Content-Type: application/json"')
+    parts.push(`-d "${endpoint.body.replace(/"/g, '\\"')}"`)
+  }
+  return parts.join(' ')
+}
+
+/** 方法徽标：GET 绿 / POST 蓝 / DELETE 红，与状态标签共用同一套色。 */
+function MethodTag(props: { method: HttpEndpointInfo['method'] }): React.ReactElement {
+  const cls = props.method === 'GET' ? 'fg-tag-ok' : props.method === 'POST' ? 'fg-tag-busy' : 'fg-tag-bad'
+  return <span className={`fg-tag ${cls}`}>{props.method}</span>
+}
+
+type SnippetKind = 'mcpServers' | 'url'
+
+function OpenApiPanel(props: { status: RuntimeStatus }): React.ReactElement {
+  const status = props.status
+  const facadeUrl = `http://127.0.0.1:${status.facadePort}${FACADE_MCP_PATH}`
+  const childPort = status.effectivePort ?? status.port
+  const childBase = `http://127.0.0.1:${childPort}`
+  const [snippet, setSnippet] = useState<SnippetKind>('mcpServers')
+
+  const snippetText =
+    snippet === 'url'
+      ? facadeUrl
+      : JSON.stringify({ mcpServers: { feyagate: { type: 'streamableHttp', url: facadeUrl } } }, null, 2)
+
+  return (
+    <div className="fg-root">
+      <Card
+        title={
+          <span>
+            MCP 接口 <span className="fg-tag">给其它 AI 用</span>
+          </span>
+        }
+        sub="支持 MCP（Streamable HTTP）的客户端都能接：Claude Desktop、Cherry Studio、Cline、Cursor、自研 Agent 等。"
+      >
+        <dl className="fg-grid">
+          <dt>MCP 地址</dt>
+          <dd>
+            <span className="fg-mono">{facadeUrl}</span> <Copy value={facadeUrl} />
+          </dd>
+          <dt>传输方式</dt>
+          <dd>Streamable HTTP（POST JSON-RPC · GET SSE 事件流 · DELETE 结束会话）</dd>
+          <dt>监听范围</dt>
+          <dd>仅 127.0.0.1（本机回环，无鉴权）；远程接入请用 SSH 隧道或带鉴权的反代</dd>
+          <dt>工具命名</dt>
+          <dd>
+            直连用上游原始名（device/list、xiaomi/set_property …）；在 DSH 内经桥接会加
+            <span className="fg-mono"> mcp__feyagate__</span> 前缀
+          </dd>
+        </dl>
+        {status.healthy ? null : (
+          <div className="fg-hint fg-state-warn">
+            {ENGINE_DISPLAY_NAME}当前未运行：这个地址现在就能连、握手不会失败，但 tools/list 是空的；先到「服务」页安装并启动服务，
+            工具会自动补上，客户端无需改动。
+          </div>
+        )}
+        <div className="fg-field">
+          <label htmlFor="fg-snippet">接入配置片段</label>
+          <select
+            id="fg-snippet"
+            className="fg-input"
+            value={snippet}
+            onChange={(event) => setSnippet(event.target.value as SnippetKind)}
+          >
+            <option value="mcpServers">通用 mcpServers 配置（Cline / Cursor / Cherry Studio 等）</option>
+            <option value="url">仅地址（一行）</option>
+          </select>
+        </div>
+        <code className="fg-code">{snippetText}</code>
+        <div className="fg-actions">
+          <Copy value={snippetText} label="复制配置片段" />
+          <span className="fg-hint">部分客户端 type 拼写不同（streamable-http / http，或可省略）；地址不变。工具数量以 tools/list 为准。</span>
+        </div>
+      </Card>
+
+      <Card
+        title={
+          <span>
+            HTTP 接口 <span className="fg-tag">给程序与脚本用</span>
+          </span>
+        }
+        sub="与官方桌面 App 同一套本机 REST 接口；响应统一为 {code, data, message}，code=0 表示成功。"
+      >
+        <dl className="fg-grid">
+          <dt>服务地址</dt>
+          <dd>
+            <span className="fg-mono">{childBase}</span> <Copy value={childBase} />
+          </dd>
+          <dt>{ENGINE_DISPLAY_NAME}</dt>
+          <dd>
+            {status.currentVersion === null
+              ? '未安装'
+              : `v${status.currentVersion}${status.healthy ? ' · 运行中' : ' · 未运行'}`}
+          </dd>
+        </dl>
+        {status.healthy ? null : (
+          <div className="fg-hint fg-state-warn">
+            {ENGINE_DISPLAY_NAME}未运行：下面用的是配置端口 {status.port}，实际端口以启动后为准（端口被占用时会自动顺延）。
+          </div>
+        )}
+        <div>
+          {HTTP_ENDPOINTS.map((endpoint) => {
+            const curl = curlFor(childBase, endpoint)
+            return (
+              <div className="fg-row" key={`${endpoint.method} ${endpoint.path}`}>
+                <div className="fg-row-main">
+                  <div>
+                    <MethodTag method={endpoint.method} /> <span className="fg-mono">{endpoint.path}</span>
+                  </div>
+                  <div className="fg-row-sub">{endpoint.desc}</div>
+                </div>
+                <Copy value={curl} label="复制 curl" />
+              </div>
+            )
+          })}
+        </div>
+        <div className="fg-hint">curl 里 -d 的引号已按 CMD / POSIX 双兼容转义，复制即可运行。浏览器网页无法直接调用这两个地址（无 CORS 头，刻意为之）。</div>
+      </Card>
+
+      <Card title="API 文档" sub="接入细节、参数与响应示例都在完整文档里，GitHub 上始终是最新版。">
+        <div className="fg-actions" style={{ marginTop: 0 }}>
+          <a className="fg-link" href={GITHUB_API_DOC_URL} target="_blank" rel="noreferrer">
+            打开完整 API 文档（docs/api.zh.md）
+          </a>
+          <a className="fg-link" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
+            GitHub 仓库
+          </a>
+          <a className="fg-link" href={GITHUB_ISSUES_URL} target="_blank" rel="noreferrer">
+            问题反馈
+          </a>
+        </div>
+        <div className="fg-hint">
+          文档覆盖：MCP 握手与工具调用示例、全部 HTTP 端点的参数与响应、端口发现（state.json 与插件 API）、安全注意事项与常见问题。
+        </div>
+      </Card>
     </div>
   )
 }
@@ -1987,6 +2192,9 @@ function LogsPanel(): React.ReactElement {
             清空视图
           </Btn>
           <Copy value={shown.map((line) => `${new Date(line.ts).toISOString()} [${line.source}] ${line.level}: ${line.text}`).join('\n')} label="复制全部" />
+          <a className="fg-link" href={GITHUB_ISSUES_URL} target="_blank" rel="noreferrer" title="带上复制好的日志，在 GitHub Issues 里反馈">
+            去 GitHub 反馈
+          </a>
         </div>
         <div className="fg-logs" style={{ marginTop: 8 }}>
           {shown.length === 0 ? (
@@ -2011,7 +2219,7 @@ function LogsPanel(): React.ReactElement {
 function FeyagateSettings(): React.ReactElement {
   const [tab, setTab] = useState<TabId>('service')
   const status = usePoll<RuntimeStatus>('/status', 2500)
-  // 顶部状态条要显示「几个平台已登录 / 试用还剩几天」，所以这里也订阅账号总览。
+  // 顶部状态条要显示「几个平台已登录」，所以这里也订阅账号总览。
   // 服务没起来时后端会立刻返回 reachable:false，轮询代价很小。
   const overview = usePoll<{
     platforms: PlatformAccount[]
@@ -2073,12 +2281,9 @@ function FeyagateSettings(): React.ReactElement {
   const accounts = overview.data?.platforms ?? []
   const reachable = overview.data?.reachable === true
   const signedIn = accounts.filter((entry) => entry.authenticated).length
-  const license = overview.data?.license ?? null
-  const trialDays = license?.platforms.reduce<number | null>((lowest, platform) => {
-    const days = platform.trialRemainingDays
-    if (days === null || days === undefined) return lowest
-    return lowest === null ? days : Math.min(lowest, days)
-  }, null)
+  // 顶栏不显示试用天数：上游用 0 表示「没有试用期/已用完」（米家永久免费也报 0），
+  // 剩余天数又随平台各不相同，压缩成一句「免费试用还剩 N 天」只会让人迷糊。
+  // 试用详情在「授权」页的平台能力表里逐平台展示。
 
   /**
    * 状态条右侧永远只放「现在该做的那一件事」：没装 → 安装，没在跑 → 启动，
@@ -2101,18 +2306,15 @@ function FeyagateSettings(): React.ReactElement {
           <ServiceStatusLine status={current} />
           <div className="fg-strip">
             <span>{reachable ? `${signedIn}/${accounts.length} 个平台已登录` : '平台状态未同步'}</span>
-            {trialDays === null ? null : (
-              <>
-                <span>·</span>
-                <span>免费试用还剩 {trialDays} 天</span>
-              </>
-            )}
-            {current.facadePort === null || current.facadePort === undefined ? null : (
-              <>
-                <span>·</span>
-                <span>MCP 门面端口 {current.facadePort}</span>
-              </>
-            )}
+            {/* 项目入口常驻状态条：所有分区都能看到，新开浏览器标签页，不抢主按钮的注意力。 */}
+            <span>·</span>
+            <a className="fg-link" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer" title="在新标签页打开 GitHub 仓库">
+              GitHub 仓库
+            </a>
+            <span>·</span>
+            <a className="fg-link" href={GITHUB_ISSUES_URL} target="_blank" rel="noreferrer" title="在新标签页打开 GitHub Issues">
+              问题反馈
+            </a>
           </div>
           {current.circuitOpen ? (
             <div className="fg-statusbar-detail fg-state-bad">已停止自动重启：修好原因后点「重启服务」，或回滚上一版本。</div>
@@ -2153,6 +2355,7 @@ function FeyagateSettings(): React.ReactElement {
       {tab === 'accounts' ? <AccountsPanel status={current} /> : null}
       {tab === 'login' ? <LoginPanel status={current} reload={reload} /> : null}
       {tab === 'settings' ? <SettingsPanel status={current} reload={reload} /> : null}
+      {tab === 'openapi' ? <OpenApiPanel status={current} /> : null}
       {tab === 'logs' ? <LogsPanel /> : null}
     </div>
   )

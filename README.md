@@ -3,9 +3,26 @@
 > **这个文件解决什么问题**：让三类读者各自在 3 分钟内找到自己要看的东西 —— 想装的人拿到最短安装路径，想贡献的人拿到开发环境与目录职责，关心合规的人拿到"仓库里到底有什么、没有什么"。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-npm 包名 `dsh-feyagate` · 版本 `0.3.5`
+npm 包名 `dsh-feyagate` · 版本 `0.3.6`
 
-> **0.3.5：设置页交互重做 + 授权页免费版文案修正**（纯界面与展示层，宿主能力未变）
+> **0.3.6：新增「开放接口」页 + 引擎改用产品名 + 反馈入口**（界面与文案层，宿主能力未变）
+>
+> - **新增第 7 个分区「开放接口」**：把网关的 MCP 与 HTTP 两个接口面搬进设置页 ——
+>   MCP 地址按**实时端口**拼出并可一键复制、「接入配置片段」下拉可在通用 `mcpServers`
+>   JSON 与纯地址之间切换；HTTP 端点速查表每行带**复制 curl**（引号已按 CMD / POSIX
+>   双兼容转义）；另有 API 文档入口与服务未运行时的明确提示。
+>   文档正文见 [docs/api.zh.md](docs/api.zh.md)（MCP 握手、工具调用示例、端点参数、
+>   端口发现方式、安全边界与常见问题），页面上只放链接，保证只有一份正文要维护。
+> - **引擎统一叫「FeyaGate MCP 引擎」**：`miloco-mcp-server` 是实现细节，界面不再要求
+>   用户认识 "miloco" 这个词（见 `ENGINE_DISPLAY_NAME`）；下载文件名示例等**事实性**
+>   文案仍然照实写。
+> - **顶栏第二行改为常驻入口**：「GitHub 仓库」「问题反馈」直接跳转，不再显示
+>   "免费试用还剩 N 天" —— 各平台剩余天数各不相同、0 又表示"没有试用期/已用完"，
+>   压缩成一句只会误导；每个平台的详情回到「授权 › 平台能力」看。
+> - **日志页新增「去 GitHub 反馈」**，配合「复制全部」把日志带到 Issues。
+> - 「门面端口」更名为 **「MCP server 端口」**（字段与行为不变，只是叫法按用户视角）。
+
+> **0.3.5（历史）：设置页交互重做 + 授权页免费版文案修正**（纯界面与展示层，宿主能力未变）
 >
 > - **一屏只有一个主按钮。** 顶部常驻状态条右侧只出现"现在该做的那一件事"（没装→安装、
 >   没跑→启动、一切正常→不放按钮）；原来"顶部大按钮 + 页内按钮"两个入口会各自触发安装，
@@ -468,6 +485,7 @@ app/dsh-feyagate/
 ### 改代码前请先读
 
 - [`docs/design.md`](docs/design.md)：双半侧职责边界、为什么桥指向门面、状态机、配置字段归属表。
+- [`docs/api.zh.md`](docs/api.zh.md)：**开放接口**（MCP 门面 + 本机 HTTP REST）的地址、协议行为、全部端点、端口发现方式与安全边界 —— 写第三方集成前先读这一份，设置页「开放接口」是它的交互版。
 - [`docs/verify-mcp-inputschema-fix.md`](docs/verify-mcp-inputschema-fix.md)：**AI 看不到 `mcp__feyagate__*` 工具**的根因链与修复证据（含真机复验与复现命令）。
 - [`docs/verify-tuya-auth-flow.md`](docs/verify-tuya-auth-flow.md)：**涂鸦授权卡在「请扫码」却没有二维码**的根因、三层适配设计与验证证据（独立解码器回环 + 真机探针）。
 - [`docs/verify-platform-login.md`](docs/verify-platform-login.md)：设置界面里五个平台登录的**能力协商、凭据边界、门禁与 `retry_without_code` 分流**怎么验的（54 项断言 + 真机探针输出）。
@@ -477,18 +495,22 @@ app/dsh-feyagate/
 
 ### 提交约定
 
-- 术语必须与 [UX 文档 §7.3](../../docs/design/feyagate-dsh-plugin-ux.md) 的唯一推荐用词一致（平台侧「登录」、许可证侧「授权」、本机进程「后台服务」）。
+- 术语必须与 [UX 文档 §7.3](../../docs/design/feyagate-dsh-plugin-ux.md) 的唯一推荐用词一致（平台侧「登录」、许可证侧「授权」）。
+- 本机那个进程有两个名字，**按场合分开用**，别混：
+  - **界面上**叫「**FeyaGate MCP 引擎**」（`ENGINE_DISPLAY_NAME`）—— 用户不需要认识上游二进制名；
+  - **代码与 ADR/内部文档**里仍叫「**后台服务**」（supervisor、child、`miloco-mcp-server` 等），
+    因为那里说的是进程与文件系统事实。下载文件名、镜像前缀等**事实性**文案照实写。
 - 不确定的事实写成"未核实/待确认"，不要写成断言。文档里的每个端口、路径、命令都必须能在本仓库或引用文档里找到出处。
 
 ---
 
 ## 实现状态（诚实声明）
 
-本 README 描述的是 **0.3.1 的形态**，`src/` 与 `scripts/` 里的文件都已落地并可构建：
+本 README 描述的是 **0.3.6 的形态**（`dsh-feyagate` 已发布到 npm），`src/` 与 `scripts/` 里的文件都已落地并可构建：
 
 - ✅ 双半侧都已在源码里：Host（`index.ts`、`runtime.ts`、`install.ts`、`supervise/*`、`mcp/facade.ts`、`api.ts`、`config-gen.ts`、`download/*`、`child-api.ts`、`settings.ts`）与浏览器半侧（`client/index.tsx` + `client/contract.ts`）。
-- ✅ 工具链齐全：`scripts/{build.sh,gen-manifest.mjs,verify-manifest.mjs,check-patch.mjs,smoke.mjs,smoke-install.mjs}`，`lib/` 是构建产物（已 gitignore）。
-- ⏳ 尚未做的**不是代码**，而是发布侧的事：npm 包发布、CI 接线、**在装有真实 `miloco-mcp-server` 的机器上跑一次验收**、设置界面的截图（本文里还是 `TODO(screenshot)` 占位）。
+- ✅ 工具链齐全：`scripts/{build.sh,gen-manifest.mjs,verify-manifest.mjs,check-manifest-guard.mjs,check-patch.mjs,smoke.mjs,smoke-install.mjs}`，`lib/` 是构建产物（已 gitignore）。
+- ⏳ 尚未做的**不是代码**，而是发布侧的事：CI 接线、**在装有真实上游引擎的机器上跑一次完整验收**、设置界面的截图（本文里还是 `TODO(screenshot)` 占位）。
 
 ### 已经实测过的部分
 

@@ -39,7 +39,7 @@ export type FeyagateContext = Context & {
 };
 /** Cordis service dependencies; the host provides both. */
 export declare const inject: string[];
-export declare const name = "@dsh-external/dsh-feyagate-gateway";
+export declare const name = "dsh-feyagate";
 export interface FeyagateConfig {
     /**
      * Override the install root. Defaults to `$DSH_FEYAGATE_HOME`, then

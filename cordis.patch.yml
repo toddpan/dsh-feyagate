@@ -2,7 +2,7 @@
 #
 # Installed through the official CLI:
 #
-#   dsh plugin --profile <name> add @dsh-external/dsh-feyagate-gateway
+#   dsh plugin --profile <name> add dsh-feyagate
 #
 # The command reconciles `dsh.profile.bundles` against installed packages and,
 # seeing `dsh.bundle.patch` in package.json, appends this bundle to the stack.

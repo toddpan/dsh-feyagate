@@ -378,7 +378,7 @@ DSH 侧栏底部「设置」→ 设置面板
 插件的包版本升级必须**重启 DSH 进程**才生效（框架限制：JS 代码换代不能热替换）。所以 MVP 只做"检测到新版本 + 提示 + 给你一条可复制的命令"：
 
 ```bash
-dsh plugin --profile <profile> add @dsh-external/dsh-feyagate-gateway@<version>
+dsh plugin --profile <profile> add dsh-feyagate@<version>
 ```
 
 在 Desktop 壳里这件事交给壳处理。**升级插件 ≠ 升级后台服务**：前者要重启 DSH，后者不用。

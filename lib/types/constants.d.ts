@@ -5,7 +5,7 @@
  * protocol paths are never duplicated as literals elsewhere in `src/`.
  */
 /** npm package name; also the Cordis entry id used in doctor output. */
-export declare const PLUGIN_ID = "@dsh-external/dsh-feyagate-gateway";
+export declare const PLUGIN_ID = "dsh-feyagate";
 /** Short name used for directory names, log prefixes, and DOM ids. */
 export declare const PLUGIN_SHORT = "dsh-feyagate";
 /** `serverName` of the MCP bridge row; makes tool names `mcp__feyagate__*`. */

@@ -38,9 +38,9 @@ DSH **没有为插件提供任何自更新 API**：没有宿主侧 updater 服�
 - 给出**可复制的命令**，由用户自己执行：
 
 ```bash
-dsh plugin --profile <profile> add @dsh-external/dsh-feyagate-gateway@<version>
+dsh plugin --profile <profile> add dsh-feyagate@<version>
 # 或（pnpm 原生子命令，被原样转发）
-dsh plugin --profile <profile> update @dsh-external/dsh-feyagate-gateway
+dsh plugin --profile <profile> update dsh-feyagate
 ```
 
 - 明确告知**必须重启 DSH 进程**才生效；Desktop shell 下把这件事交给 shell。
@@ -60,7 +60,7 @@ dsh plugin --profile <profile> update @dsh-external/dsh-feyagate-gateway
 
 两个升级路径**完全独立**：
 
-| | 后台服务（`miloco-mcp-server`） | 插件自身（`@dsh-external/dsh-feyagate-gateway`） |
+| | 后台服务（`miloco-mcp-server`） | 插件自身（`dsh-feyagate`） |
 |---|---|---|
 | 谁执行 | 插件的 Host 代码 | 用户 / DSH CLI |
 | 需要重启 DSH？ | ❌ 不需要 | ✅ 必须 |

@@ -23,7 +23,7 @@ export interface LauncherInfo {
     /** True when the profile was actually detected (not a placeholder). */
     profileKnown: boolean;
 }
-declare const PACKAGE_NAME = "@dsh-external/dsh-feyagate-gateway";
+declare const PACKAGE_NAME = "dsh-feyagate";
 /**
  * Computed once at module load: the host's arguments never change during a run,
  * and the UI reads this on every render.
